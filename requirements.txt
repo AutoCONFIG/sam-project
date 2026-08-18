@@ -1,0 +1,9 @@
+# SAM 3 Project — Frontend Dependencies
+#
+# NOTE: The SAM 3 backend dependencies are in sam3/pyproject.toml.
+# Install the backend first: cd sam3 && pip install -e .
+# PyTorch must be installed separately (see README.md for CUDA version guidance).
+
+pyyaml>=6.0
+opencv-python>=4.8
+numpy>=1.26

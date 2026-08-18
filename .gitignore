@@ -1,0 +1,22 @@
+# Output directories
+runs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+
+# Model weights (large files, not tracked)
+weights/
+*.pt
+
+# IDE / editor
+.zcode/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
