@@ -1,4 +1,4 @@
 [submodule "sam3"]
 	path = sam3
 	url = git@github.com:AutoCONFIG/sam3.git
-	branch = sam-project
+	branch = main
