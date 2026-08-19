@@ -1,43 +1,69 @@
-# SAM 3 训练配置示例 (转发到 sam3 子模块的 Hydra 训练系统)
+# SAM 3 训练配置 (Roboflow 官方参考配置复现/对照)
 # 用法: python sam.py configs/train/roboflow_finetune.yaml
 #
-# 配置分三个独立 YAML (参照 yolo-project 的分离模式):
-#   configs/train/xxx.yaml    ← 本文件: 模型/数据引用/训练旋钮/输出
-#   configs/datasets/xxx.yaml ← 数据集根目录 + COCO 目录布局 (下方 data.config 引用)
-#   configs/export/xxx.yaml   ← ONNX 导出 (mode: export, 独立命令)
+# 注意: 该模型配置的 hydra_config 指向官方参考配置, 数据集路径在
+# sam3/sam3/train/configs/roboflow_v100/ 配置的 paths 段里改,
+# 不支持 configs/datasets/ 注入 (键名不同)
+#
+# 约定: 下面列出前端支持的全部字段 (均已核实为后端真实存在的键),
+# 默认值与官方参考配置一致; 删掉/留空某字段 = 不修改后端, 用后端原值
 mode: train
 
 model:
-  # 模型网络配置 (独立 YAML, 其中 hydra_config 指向子模块内的官方参考配置)
-  config: configs/models/sam3_roboflow_ref.yaml
-
-  # pretrained: /path/to/sam3.pt  # 预训练权重路径; true=HF 自动下载(默认); false=从零训练
-  # resolution: 1008              # 训练分辨率, 336 的倍数 (→ scratch.resolution + trainer.model.image_size 同步改)
+  config: configs/models/sam3_roboflow_ref.yaml   # 模型网络配置 (独立 YAML)
+  hydra_config:         # 临时覆盖模型配置里的 hydra_config, 一般留空
+  pretrained:           # 临时覆盖模型配置里的 pretrained, 一般留空
+  resolution:           # 临时覆盖模型配置里的 resolution, 一般留空
 
 data:
-  # 独立数据集配置 (COCO 格式); 仅配合前端模板 custom_image_ft.yaml 使用,
-  # 本例直接用后端 roboflow 参考配置时, 数据集路径在该配置的 paths 段里改
-  # config: configs/datasets/roboflow_vl_100.yaml
+  config:               # 数据集配置 (独立 YAML); 本例用官方参考配置时不支持, 留空
 
 train:
   # ── 资源 ──
-  use_cluster: 0    # 0=本地, 1=SLURM 集群 (后端参考配置默认 1, 本地必须显式设 0)
-  num_gpus: 4       # 每节点 GPU 数, 按机器调整
-  num_nodes: 1      # 节点数
-  # device: "0,1,2,3"   # 指定用哪几张卡 (CUDA_VISIBLE_DEVICES); 不设则用全部可见卡
+  use_cluster: 0        # 0=本地, 1=SLURM 集群 (官方参考配置默认 1, 本地必须显式设 0)
+  num_gpus: 4           # 每节点 GPU 数 (按机器改)
+  num_nodes: 1          # 节点数
+  device:               # 指定用哪几张卡, 如 "0,1,2,3"; 空=全部可见卡
+  partition:            # SLURM 分区 (仅 use_cluster: 1)
+  account:              # SLURM 账户 (仅 use_cluster: 1)
+  qos:                  # SLURM QOS (仅 use_cluster: 1)
+  timeout_hour: 72      # 任务时限 → submitit.timeout_hour (仅集群)
+  cpus_per_task: 10     # 每任务 CPU 数 → submitit.cpus_per_task (仅集群)
 
-  # ── 常用训练参数 (前端翻译为 Hydra override) ──
-  # batch: 1                    # 每卡 batch (→ scratch.train_batch_size)
-  # epochs: 20                  # 训练轮数 (→ trainer.max_epochs)
+  # ── 优化器 / 学习率 ──
+  lr_scale: 0.1              # → scratch.lr_scale
+  weight_decay: 0.1          # → scratch.wd
+  lrd: 0.9                   # → scratch.lrd_vision_backbone
+  scheduler_timescale: 20    # → scratch.scheduler_timescale
+  scheduler_warmup: 20       # → scratch.scheduler_warmup
+  scheduler_cooldown: 20     # → scratch.scheduler_cooldown
+  grad_clip: 0.1             # → trainer.optim.gradient_clip.max_norm
+  amp: true                  # → trainer.optim.amp.enabled
+  amp_dtype: bfloat16        # → trainer.optim.amp.amp_dtype
 
-  # ── 任意 Hydra 覆盖 (原样透传; 同键时靠后的生效) ──
-  # overrides:
-  #   - scratch.lr_scale=0.05           # 学习率缩放 (lr = base × lr_scale)
-  #   - trainer.val_epoch_freq=5        # 每隔几轮验证一次
-  #   - scratch.num_train_workers=4     # dataloader 进程数
-  #   - trainer.skip_saving_ckpts=false # 保存 checkpoint (参考配置默认 true 不存!)
+  # ── 训练循环 ──
+  batch: 1              # → scratch.train_batch_size
+  epochs: 20            # → trainer.max_epochs
+  grad_accum: 1         # → scratch.gradient_accumulation_steps
+  seed: 123             # → trainer.seed_value
+  val_freq: 10          # → trainer.val_epoch_freq
+  skip_first_val: true  # → trainer.skip_first_val
+  val_batch: 1          # → scratch.val_batch_size
+
+  # ── 数据加载 ──
+  workers: 10           # → scratch.num_train_workers
+  val_workers: 0        # → scratch.num_val_workers
+  max_ann_per_img: 200  # → scratch.max_ann_per_img
+
+  # ── 记录 / 保存 ──
+  save_freq: 0          # → trainer.checkpoint.save_freq (0=只存最后一个)
+  log_freq: 10          # → trainer.logging.log_freq
+
+  # ── 任意 Hydra 覆盖 (原样透传; 同键时优先级最高) ──
+  # 官方参考配置 trainer.skip_saving_ckpts 默认 true 不存 checkpoint,
+  # 要存权重必须保留下面这条 (fork 模板 custom_image_ft.yaml 里已默认 false)
+  overrides:
+    - trainer.skip_saving_ckpts=false
 
 output:
-  # 实验输出目录 (checkpoints/tensorboard/logs), 相对项目根或绝对路径;
-  # 不设则用 Hydra 配置里的 paths.experiment_log_dir
-  # path: runs/train/roboflow_ft
+  path: runs/train/roboflow_ft    # 实验输出目录 → paths.experiment_log_dir

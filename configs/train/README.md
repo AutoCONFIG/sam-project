@@ -29,21 +29,40 @@
 # data:
 #   config: configs/datasets/roboflow_vl_100.yaml   # 数据集配置 (独立 YAML, 见 configs/datasets/)
 # train:
+#   # 资源
 #   use_cluster: 0          # 0=本地, 1=SLURM 集群
 #   num_gpus: 4             # 每节点 GPU 数
 #   num_nodes: 1            # 节点数
-#   device: "0,1,2,3"       # 可选, 指定用哪几张卡 (CUDA_VISIBLE_DEVICES); 不设则用全部可见卡
-#   batch: 1                # 每卡 batch → scratch.train_batch_size
-#   epochs: 20              # 训练轮数 → trainer.max_epochs
-#   lr_scale: 0.1           # 学习率缩放 (各组 lr = base × lr_scale) → scratch.lr_scale
-#   weight_decay: 0.1       # 权重衰减 → scratch.wd
-#   grad_accum: 1           # 梯度累积步数 → scratch.gradient_accumulation_steps
-#   val_freq: 10            # 验证频率 → trainer.val_epoch_freq
-#   workers: 10             # dataloader 进程数 → scratch.num_train_workers
-#   save_freq: 0            # checkpoint 保存频率 (0=只存最后一个) → trainer.checkpoint.save_freq
-#   seed: 123               # 随机种子 → trainer.seed_value
-#   amp: true               # bf16 混合精度 → trainer.optim.amp.enabled
-#   # 任意 Hydra 覆盖 (原样透传, 同键靠后生效, 优先级最高) —— 长尾参数都走这里
+#   device: "0,1,2,3"       # 指定用哪几张卡 (CUDA_VISIBLE_DEVICES); 空=全部可见卡
+#   partition/account/qos   # SLURM 参数 (仅集群)
+#   timeout_hour: 72        # → submitit.timeout_hour (仅集群)
+#   cpus_per_task: 10       # → submitit.cpus_per_task (仅集群)
+#   # 优化器 / 学习率
+#   lr_scale: 0.1           # → scratch.lr_scale (各组 lr = base × lr_scale)
+#   weight_decay: 0.1       # → scratch.wd
+#   lrd: 0.9                # → scratch.lrd_vision_backbone (ViT 逐层衰减)
+#   scheduler_timescale: 20 # → scratch.scheduler_timescale
+#   scheduler_warmup: 20    # → scratch.scheduler_warmup
+#   scheduler_cooldown: 20  # → scratch.scheduler_cooldown
+#   grad_clip: 0.1          # → trainer.optim.gradient_clip.max_norm
+#   amp: true               # → trainer.optim.amp.enabled
+#   amp_dtype: bfloat16     # → trainer.optim.amp.amp_dtype
+#   # 训练循环
+#   batch: 1                # → scratch.train_batch_size
+#   epochs: 20              # → trainer.max_epochs
+#   grad_accum: 1           # → scratch.gradient_accumulation_steps
+#   seed: 123               # → trainer.seed_value
+#   val_freq: 10            # → trainer.val_epoch_freq
+#   skip_first_val: true    # → trainer.skip_first_val
+#   val_batch: 1            # → scratch.val_batch_size
+#   # 数据加载
+#   workers: 10             # → scratch.num_train_workers (Windows 建议 0)
+#   val_workers: 0          # → scratch.num_val_workers
+#   max_ann_per_img: 200    # → scratch.max_ann_per_img (单图最多标注数)
+#   # 记录 / 保存
+#   save_freq: 0            # → trainer.checkpoint.save_freq (0=只存最后一个)
+#   log_freq: 10            # → trainer.logging.log_freq
+#   # 任意 Hydra 覆盖 (原样透传, 同键靠后生效, 优先级最高) —— 未列长尾键都走这里
 #   overrides:
 #     - scratch.enable_segmentation=true   # 开分割训练 (还需模板里 3 处联动, 见模板注释)
 # output:

@@ -9,6 +9,9 @@ mode: predict
 model:
   version: sam3.1                   # 模型版本: sam3.1 (推荐) / sam3 (原版, 需≥24GB)
   checkpoint: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/sam-project/pretrain/sam3.1/sam3.1_multiplex.pt
+  finetune_ckpt:                    # 微调权重 (训练链产出 runs/train/.../checkpoints/checkpoint.pt;
+                                    # 仅 sam3.1, 加载进 detector, checkpoint 仍提供 tracker 等基础权重;
+                                    # 注意训练 resolution 需与 image_size 一致), 空=不用微调权重
   image_size: 672                   # 推理分辨率, 须为 336 的倍数; 16G 显存用 672 (sam3.1 专用)
   use_fa3: false                    # Flash Attention 3 (需安装 flash-attn)
   use_rope_real: true               # 实数 RoPE (避免 complex64 buffer)

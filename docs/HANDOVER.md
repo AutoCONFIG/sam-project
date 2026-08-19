@@ -22,24 +22,27 @@ sam-project/
 ├── sam.py                          # 统一入口: 读 YAML mode → 分发到 commands/
 ├── commands/
 │   ├── predict.py                  # 推理 (文本提示, 输出形态跟随输入 + 标签导出)
-│   └── train.py                    # 训练 (subprocess 转发到 Hydra)
+│   ├── train.py                    # 训练 (subprocess 转发到 Hydra)
+│   └── export.py                   # ONNX 导出 (multiplex 拆分 6 子模型)
 ├── core/
 │   ├── engine.py                   # Sam3VideoPredictor 封装 (sam3 / sam3.1 双版本)
 │   ├── visualization.py            # mask 叠加可视化
 │   ├── labels.py                   # COCO + YOLO 标签导出 (框 + 多边形)
-│   └── io_dispatch.py             # 输入扫描 + 输出目录镜像
+│   ├── io_dispatch.py             # 输入扫描 + 输出目录镜像
+│   └── export/                     # ONNX 导出包 (wrappers + 6 个导出器 + utils)
 ├── utils/
 │   ├── config.py                   # YAML 加载、深合并、argparse 工具
 │   └── constants.py                # 默认常量
 ├── configs/
 │   ├── predict/video_text.yaml     # sam3.1 推理配置示例
 │   ├── predict/video_text_sam3.yaml# sam3 原版推理配置示例 (需 ≥24GB)
+│   ├── export/default.yaml         # ONNX 导出配置示例
 │   ├── train/                      # 训练入口配置 (model/data/train/output 分区 + README)
 │   ├── models/                     # 模型网络配置 (hydra_config/pretrained/resolution/网络 overrides)
 │   └── datasets/                   # 独立数据集配置 (COCO 格式, 由 train 配置的 data.config 引用)
 ├── docs/
 │   ├── HANDOVER.md                 # 本文件
-│   └── ONNX_EXPORT_PLAN.md         # ONNX 导出计划 (暂不实现)
+│   └── ONNX_EXPORT_PLAN.md         # ONNX 导出计划 + 第一版实现要点
 ├── pretrain/                       # 预训练权重 (.gitignore, 需手动下载)
 │   ├── sam3.1/                     # SAM 3.1 multiplex 权重 + tokenizer
 │   └── sam3/                       # SAM 3 原版权重 + tokenizer
@@ -85,6 +88,8 @@ sam-project/
 **关键设计：**
 - `image_size` 参数贯穿模型构建链（在 sam3 子模块的 `model_builder.py` 中实现，仅 sam3.1）
 - `image_size != 1008` 时自动过滤 RoPE 位置编码 buffer（`freqs_cis` 等），避免 shape mismatch
+- `model.finetune_ckpt` 支持加载微调权重：训练产出的 image model 裸 state_dict 在模型构建后灌进
+  `predictor.model.detector`（strict=False），基础 checkpoint 仍提供 tracker 等其余权重（仅 sam3.1）
 - 16GB 显卡用 `image_size=672`（须为 336 的倍数）
 - 模型自带全局 bf16 autocast，权重保持 fp32，不要手动转 dtype
 - `offload_video_to_cpu=True` 节省 GPU 显存
@@ -113,7 +118,7 @@ sam-project/
 - ✅ 前端训练配置分区为 `model`（`config` 引用 `configs/models/` 模型网络配置： hydra_config/pretrained/resolution/网络 overrides）/ `data`（`config` 引用独立数据集 YAML）/ `train`（资源与旋钮）/ `output`（`path` → `paths.experiment_log_dir`），示例 `configs/train/custom_finetune.yaml`
 - ✅ 数据集配置独立成 `configs/datasets/*.yaml`（path/train/val/ann_file/num_images），前端翻译为 `paths.dataset_root` + `trainer.data.{train,val}.dataset.{img_folder,ann_file}` + 验证 GT 路径等 override；依赖模板标准键，配合 `custom_image_ft.yaml` 使用
 - ✅ `paths.bpe_path` 自动注入子模块内绝对路径，无需手配
-- ✅ 常用训练旋钮前端直配（均映射到后端配置里核实存在的键）：`batch`→`scratch.train_batch_size`、`epochs`→`trainer.max_epochs`、`lr_scale`→`scratch.lr_scale`、`weight_decay`→`scratch.wd`、`grad_accum`→`scratch.gradient_accumulation_steps`、`val_freq`→`trainer.val_epoch_freq`、`workers`→`scratch.num_train_workers`、`save_freq`→`trainer.checkpoint.save_freq`、`seed`→`trainer.seed_value`、`amp`→`trainer.optim.amp.enabled`、`device`（CUDA_VISIBLE_DEVICES）、`overrides`（任意 Hydra 覆盖透传；后端 `train.py` 已改 `parse_known_args` + `compose(overrides=)`）
+- ✅ 训练旋钮全量前端直配（23 个，均映射到后端配置里逐一核实存在的键，默认值与后端一致，删掉/留空即不改）：batch/epochs/lr_scale/weight_decay/lrd/scheduler_timescale/scheduler_warmup/scheduler_cooldown/grad_accum/grad_clip/amp/amp_dtype/val_freq/skip_first_val/val_batch/workers/val_workers/max_ann_per_img/save_freq/log_freq/seed/timeout_hour/cpus_per_task（映射表 `commands/train.py: TRAIN_KEY_MAP`）；长尾键走 `train.overrides` 透传
 - ✅ subprocess 透传 `PYTHONPATH=<sam3 子模块>`，未 `pip install -e sam3` 也能 import
 - ✅ `build_sam3_image_model(image_size=...)` 训练链路分辨率参数化（须为 336 倍数）
 
@@ -127,11 +132,15 @@ sam-project/
 
 **缺失项：**
 - ❌ **没有实际跑通过训练**：只是 subprocess 转发，未验证端到端
-- ❌ **没有 checkpoint 管理**：训练产出（image model 裸 state_dict）→ sam3.1 multiplex 推理（需 `detector./tracker.` 前缀）的键重映射缺失
+- ✅ **checkpoint 管理已打通（2026-08-19，纯前端实现）**：predict 配置 `model.finetune_ckpt` 指向训练产出的 `checkpoint.pt`（image model 裸 state_dict），engine 在构建 predictor 后加载进 `predictor.model.detector`（strict=False，复用后端 `Sam3MultiplexBase` 的既定约定；RoPE buffer 一律丢弃用模型自身预计算的，训练/推理分辨率需一致）；仅支持 sam3.1，sam3 原版键结构不同
 
-### 3.4 ONNX 导出 — 📄 计划已存，暂不实现
+### 3.4 ONNX 导出 (export) — ⚠️ 第一版已实现，未实际运行验证
 
-详见 `docs/ONNX_EXPORT_PLAN.md`。SAM3 无内置导出功能，需拆分为 6 个子模型分别导出。
+详见 `docs/ONNX_EXPORT_PLAN.md`（含实现要点与和原计划有出入的地方）。
+- `commands/export.py` + `core/export/` 包 + `configs/export/default.yaml`，`sam.py` MODES 已挂 `export`
+- 6 个子模型（A 图像编码器 / B 文本编码器 / C 提示编码器 / D 记忆注意力 / E 掩码解码器 / F 记忆编码器）全部实现，均来自 `build_sam3_multiplex_video_predictor` 一次构建（与 predict 同一构建链）
+- 导出需要 CUDA 与额外依赖（onnx 必需；onnxruntime/onnxsim/onnxconverter-common 按需，见 requirements.txt 注释）
+- ❌ **未跑通验证**：实现环境无 Python/GPU，只有静态代码走读；需在有环境的机器上跑 `python sam.py configs/export/default.yaml` 验证可导出性与数值一致性
 
 ## 4. 关键技术决策记录
 
@@ -215,6 +224,6 @@ SAM3 和 SAM3.1 是**同一模型的版本迭代**（不是不同任务）：
 3. **微调工作流封装** — 预训练权重加载 → 自定义数据 fine-tune → checkpoint 保存
 4. ~~训练配置模板~~（已完成：`sam3/sam3/train/configs/custom_image_ft.yaml` + 独立 `configs/datasets/`）
 5. **点/框提示推理** — predict 命令增加 `--points`/`--boxes` 参数
-6. **checkpoint 管理** — 训练产出 → 推理加载的衔接
+6. ~~checkpoint 管理~~（已完成：predict `model.finetune_ckpt` → detector 运行时加载，见 3.3 缺失项）
 7. **Windows 推理+ONNX 导出评估** — 评估 Win 下能否跑推理和导出（基本开发用，重活留 Linux）
-8. **ONNX 导出** — 按 `docs/ONNX_EXPORT_PLAN.md` 实现（暂缓）
+8. ~~**ONNX 导出**~~（第一版已实现，见 3.4）→ **导出实际跑通验证** — 在有 GPU 的环境跑 `configs/export/default.yaml` 并核对 onnxruntime 数值对比

@@ -86,6 +86,8 @@ Examples:
                         help=f"模型版本 (默认 {DEFAULT_MODEL_VERSION}; sam3 固定 image_size=1008)")
     parser.add_argument("--checkpoint", "-c", type=str, default=None,
                         help="模型权重路径 (sam3.1_multiplex.pt 或 sam3.pt)")
+    parser.add_argument("--finetune-ckpt", type=str, default=None,
+                        help="微调 checkpoint (训练链产出的 image model 权重, 仅 sam3.1; 加载进 detector, 基础权重仍由 checkpoint 提供)")
     parser.add_argument("--input", "-i", type=str, default=None,
                         help="输入视频文件或图片帧目录")
     parser.add_argument("--output", "-o", type=str, default=None,
@@ -132,7 +134,7 @@ def args_to_config(args: argparse.Namespace) -> Dict[str, Any]:
 
     model_cfg = config_from_args(
         args,
-        plain=("version", "checkpoint", "image_size", "frame_index"),
+        plain=("version", "checkpoint", "image_size", "frame_index", "finetune_ckpt"),
         boolean=("use_fa3", "use_rope_real", "compile"),
     )
     if model_cfg:
@@ -166,6 +168,7 @@ def predict(config: Dict) -> None:
     # ── Extract config ──────────────────────────────────────────────────
     version = get_nested_value(config, "model", "version", default=DEFAULT_MODEL_VERSION)
     checkpoint = get_nested_value(config, "model", "checkpoint")
+    finetune_ckpt = get_nested_value(config, "model", "finetune_ckpt")
     image_size = get_nested_value(config, "model", "image_size", default=DEFAULT_IMAGE_SIZE)
     use_fa3 = get_nested_value(config, "model", "use_fa3", default=DEFAULT_USE_FA3)
     use_rope_real = get_nested_value(config, "model", "use_rope_real", default=DEFAULT_USE_ROPE_REAL)
@@ -223,6 +226,8 @@ def predict(config: Dict) -> None:
     print(f"SAM {version} 推理")
     print(f"{'='*60}")
     print(f"模型权重: {checkpoint}")
+    if finetune_ckpt:
+        print(f"微调权重: {finetune_ckpt} (加载进 detector)")
     if version == "sam3.1":
         print(f"推理分辨率: {image_size}")
     else:
@@ -245,6 +250,7 @@ def predict(config: Dict) -> None:
         use_fa3=use_fa3,
         use_rope_real=use_rope_real,
         compile=compile_model,
+        finetune_ckpt=finetune_ckpt,
     )
     print(f"模型构建完成\n")
 

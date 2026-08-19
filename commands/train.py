@@ -71,6 +71,34 @@ _DEFAULT_TRAIN_SUBDIR = "train"
 _DEFAULT_VAL_SUBDIR = "valid"
 _DEFAULT_ANN_FILE = "_annotations.coco.json"
 
+# 训练旋钮 → Hydra 键映射: 键均已对照官方 roboflow 参考配置与
+# sam3/sam3/train/configs/custom_image_ft.yaml 逐一核实存在且语义一致
+TRAIN_KEY_MAP = {
+    "batch": "scratch.train_batch_size",
+    "epochs": "trainer.max_epochs",
+    "lr_scale": "scratch.lr_scale",                 # 各组 lr = base × lr_scale
+    "weight_decay": "scratch.wd",
+    "lrd": "scratch.lrd_vision_backbone",           # ViT layer-wise lr decay
+    "scheduler_timescale": "scratch.scheduler_timescale",
+    "scheduler_warmup": "scratch.scheduler_warmup",
+    "scheduler_cooldown": "scratch.scheduler_cooldown",
+    "grad_accum": "scratch.gradient_accumulation_steps",
+    "grad_clip": "trainer.optim.gradient_clip.max_norm",
+    "amp": "trainer.optim.amp.enabled",             # bf16 autocast
+    "amp_dtype": "trainer.optim.amp.amp_dtype",
+    "val_freq": "trainer.val_epoch_freq",
+    "skip_first_val": "trainer.skip_first_val",
+    "val_batch": "scratch.val_batch_size",
+    "workers": "scratch.num_train_workers",
+    "val_workers": "scratch.num_val_workers",
+    "max_ann_per_img": "scratch.max_ann_per_img",   # 单图最多标注数 (超出过滤)
+    "save_freq": "trainer.checkpoint.save_freq",    # 0=只存最后一个
+    "log_freq": "trainer.logging.log_freq",
+    "seed": "trainer.seed_value",
+    "timeout_hour": "submitit.timeout_hour",        # 仅集群
+    "cpus_per_task": "submitit.cpus_per_task",      # 仅集群
+}
+
 
 # ─── Argument parser ────────────────────────────────────────────────────────
 
@@ -256,20 +284,8 @@ def build_hydra_overrides(knobs: Dict[str, Any]) -> List[str]:
         overrides.append(f"scratch.resolution={resolution}")
         overrides.append(f"++trainer.model.image_size={resolution}")
 
-    # ── 训练旋钮 → Hydra 键映射 (键均已对照 roboflow 参考配置与 custom_image_ft.yaml 核实) ──
-    key_map = {
-        "batch_size": "scratch.train_batch_size",
-        "max_epochs": "trainer.max_epochs",
-        "lr_scale": "scratch.lr_scale",                 # 各组 lr = base × lr_scale
-        "weight_decay": "scratch.wd",
-        "grad_accum": "scratch.gradient_accumulation_steps",
-        "val_freq": "trainer.val_epoch_freq",
-        "workers": "scratch.num_train_workers",
-        "save_freq": "trainer.checkpoint.save_freq",    # 0=只存最后一个
-        "seed": "trainer.seed_value",
-        "amp": "trainer.optim.amp.enabled",             # bf16 autocast
-    }
-    for knob, hydra_key in key_map.items():
+    # ── 训练旋钮 → Hydra 键 (TRAIN_KEY_MAP, 均为后端配置里确认存在的键) ──
+    for knob, hydra_key in TRAIN_KEY_MAP.items():
         value = knobs.get(knob)
         if value is None:
             continue
@@ -309,8 +325,13 @@ def train(config: Dict) -> None:
             f"(Hydra 训练配置路径, 如 sam3/sam3/train/configs/custom_image_ft.yaml)"
         )
     # 训练 YAML 的 model.pretrained/resolution 可覆盖模型配置里的同名项
-    pretrained = model_cfg.get("pretrained", net_cfg.get("pretrained"))
-    resolution = model_cfg.get("resolution", net_cfg.get("resolution"))
+    # (不能用 dict.get 的默认值或 or: 空字段是 None 需要回落, 而 pretrained=false 是合法值)
+    pretrained = model_cfg.get("pretrained")
+    if pretrained is None:
+        pretrained = net_cfg.get("pretrained")
+    resolution = model_cfg.get("resolution")
+    if resolution is None:
+        resolution = net_cfg.get("resolution")
     net_overrides = net_cfg.get("overrides") or []
 
     use_cluster = train_cfg.get("use_cluster")
@@ -356,17 +377,8 @@ def train(config: Dict) -> None:
     hydra_overrides += build_hydra_overrides({
         "pretrained": pretrained,
         "resolution": resolution,
-        "batch_size": train_cfg.get("batch"),
-        "max_epochs": train_cfg.get("epochs"),
-        "lr_scale": train_cfg.get("lr_scale"),
-        "weight_decay": train_cfg.get("weight_decay"),
-        "grad_accum": train_cfg.get("grad_accum"),
-        "val_freq": train_cfg.get("val_freq"),
-        "workers": train_cfg.get("workers"),
-        "save_freq": train_cfg.get("save_freq"),
-        "seed": train_cfg.get("seed"),
-        "amp": train_cfg.get("amp"),
         "overrides": train_cfg.get("overrides"),
+        **{k: train_cfg.get(k) for k in TRAIN_KEY_MAP},
     })
     hydra_overrides = _dedupe_overrides(hydra_overrides)
 
