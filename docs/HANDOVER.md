@@ -109,6 +109,7 @@ sam-project/
 - SAM3 Hydra 训练脚本存在，依赖已安装（hydra 1.3.5, submitit）
 - 15+ 个 Hydra 训练配置文件存在于 `sam3/sam3/train/configs/`（roboflow_v100, odinw13, saco_video_evals 等）
 - ✅ 前端配置示例 `configs/train/roboflow_finetune.yaml`；`train.config` 支持前端相对/绝对路径（子模块外的自定义配置启动时自动同步到 `sam3/sam3/train/configs/_custom/`，已在子模块 .gitignore 忽略）
+- ✅ 常用训练参数前端直配：`pretrained`（路径/true/false）、`batch_size`、`max_epochs`、`resolution`（自动同步 `scratch.resolution` + `trainer.model.image_size`）、`gpu_ids`（CUDA_VISIBLE_DEVICES）、`overrides`（任意 Hydra 覆盖透传；后端 `train.py` 已改 `parse_known_args` + `compose(overrides=)`）
 - ✅ subprocess 透传 `PYTHONPATH=<sam3 子模块>`，未 `pip install -e sam3` 也能 import
 - ✅ `build_sam3_image_model(image_size=...)` 训练链路分辨率参数化（须为 336 倍数）
 
@@ -118,7 +119,7 @@ sam-project/
 - 预训练权重：`trainer.model.checkpoint_path` 指向本地 .pt；不配则 `load_from_HF=True` 默认从 HF 下载 sam3 原版（gated repo 需 token）
 - 数据格式为 COCO（img_folder + `_annotations.coco.json`），文本 prompt = `categories[].name`；只支持图片级训练（video dataset 类存在但无训练配置）
 - odinw 配置里的 `freeze_*` / `use_act_checkpoint_*` 键无代码消费，是死配置——开箱只支持全量微调
-- 前端无法透传任意 Hydra override（后端 argparse 用 `parse_args`），改路径/超参需直接编辑子模块里的 Hydra 配置
+- 任意 Hydra 覆盖可通过前端 `train.overrides` 列表透传（后端 `train.py` 已改 `parse_known_args` + `compose(overrides=)`）；键在参考配置里不存在的用 `++` 前缀（前端翻译常用参数时已自动处理）
 
 **缺失项：**
 - ❌ **没有实际跑通过训练**：只是 subprocess 转发，未验证端到端

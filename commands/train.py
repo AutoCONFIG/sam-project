@@ -14,6 +14,11 @@ or absolute). Configs living outside the sam3 submodule are synced into
 ``sam3/sam3/train/configs/_custom/`` automatically at launch, because Hydra
 requires configs to live inside the ``sam3.train`` module.
 
+Common training knobs (``train.pretrained`` / ``batch_size`` / ``max_epochs`` /
+``resolution`` / ``gpu_ids``) are translated into Hydra overrides, and
+``train.overrides`` passes any raw Hydra override through verbatim (the
+backend ``train.py`` forwards them to ``hydra.compose``).
+
 Usage::
 
     python sam.py configs/train/roboflow_finetune.yaml
@@ -25,7 +30,7 @@ import shutil
 import subprocess
 import sys
 import traceback
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from utils.config import (
     get_nested_value,
@@ -33,6 +38,7 @@ from utils.config import (
     setup_sam3_path,
 )
 from utils.config import PROJECT_ROOT, SAM3_ROOT
+from utils.constants import IMAGE_SIZE_STEP
 
 setup_sam3_path()
 
@@ -52,6 +58,8 @@ def parse_args() -> argparse.Namespace:
 Examples:
     python sam.py configs/train/roboflow_finetune.yaml
     python -m commands.train --config configs/train/roboflow_finetune.yaml --num-gpus 2
+    python sam.py configs/train/roboflow_finetune.yaml --batch-size 2 --resolution 672
+    python sam.py configs/train/roboflow_finetune.yaml --override scratch.lr_scale=0.05
 
 train.config 写前端视角的路径 (相对于项目根或绝对路径), 如:
     sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
@@ -69,6 +77,20 @@ train.config 写前端视角的路径 (相对于项目根或绝对路径), 如:
     parser.add_argument("--qos", type=str, default=None, help="SLURM QOS")
     parser.add_argument("--num-gpus", type=int, default=None, help="每节点 GPU 数")
     parser.add_argument("--num-nodes", type=int, default=None, help="节点数")
+
+    # ── 常用训练参数 (翻译为 Hydra override) ──
+    parser.add_argument("--pretrained", type=str, default=None,
+                        help="预训练权重: 路径 / true (HF 自动下载, 默认) / false (从零训练)")
+    parser.add_argument("--batch-size", type=int, default=None,
+                        help="每卡 batch size (scratch.train_batch_size)")
+    parser.add_argument("--max-epochs", type=int, default=None,
+                        help="训练轮数 (trainer.max_epochs)")
+    parser.add_argument("--resolution", type=int, default=None,
+                        help="训练分辨率, 须为 336 的倍数 (同步改 scratch.resolution 与 trainer.model.image_size)")
+    parser.add_argument("--gpu-ids", type=str, default=None,
+                        help="使用哪些 GPU, 如 '1,2,3' (CUDA_VISIBLE_DEVICES; 未给 num-gpus 时按数量自动设置)")
+    parser.add_argument("--override", type=str, default=None, action="append",
+                        help="透传任意 Hydra 覆盖, 可多次使用, 如 --override scratch.lr_scale=0.05")
 
     return parser.parse_args()
 
@@ -118,6 +140,65 @@ def resolve_hydra_config(config_value: str) -> str:
     return f"configs/_custom/{path.name}"
 
 
+# ─── Hydra override translation ─────────────────────────────────────────────
+
+
+def _dedupe_overrides(overrides: List[str]) -> List[str]:
+    """同一键多次覆盖时后者生效 (Hydra 对重复键报错), 保持首次出现顺序。"""
+    seen: Dict[str, str] = {}
+    for ov in overrides:
+        key = ov.split("=", 1)[0].lstrip("+")
+        seen[key] = ov
+    return list(seen.values())
+
+
+def build_hydra_overrides(train_cfg: Dict[str, Any]) -> List[str]:
+    """把前端 train.* 常用配置翻译为 Hydra override 列表。
+
+    ``++`` 前缀 = 键可能不存在于参考配置中 (checkpoint_path/image_size/
+    load_from_HF 在参考配置的 model 段里都没有), 让 Hydra 自动 add-or-override;
+    参考配置里已有的键 (train_batch_size/resolution/max_epochs) 用普通 ``=``。
+    """
+    overrides: List[str] = []
+
+    # pretrained: 路径 / true / false (YAML 里加引号的字符串形式也归一化)
+    pretrained = train_cfg.get("pretrained")
+    if isinstance(pretrained, str):
+        low = pretrained.strip().lower()
+        if low in ("false", "none", "null"):
+            pretrained = False
+        elif low == "true":
+            pretrained = None
+    if pretrained is False:
+        # 从零训练: 关掉 HF 自动下载即可 (checkpoint_path 缺省为 None)
+        overrides.append("++trainer.model.load_from_HF=false")
+    elif isinstance(pretrained, str):
+        overrides.append(f'++trainer.model.checkpoint_path="{pretrained.strip()}"')
+    # pretrained 缺省或为 true: 后端默认 load_from_HF=True, 自动从 HF 下载 sam3 权重
+
+    if train_cfg.get("batch_size") is not None:
+        overrides.append(f"scratch.train_batch_size={int(train_cfg['batch_size'])}")
+    if train_cfg.get("max_epochs") is not None:
+        overrides.append(f"trainer.max_epochs={int(train_cfg['max_epochs'])}")
+
+    resolution = train_cfg.get("resolution")
+    if resolution is not None:
+        resolution = int(resolution)
+        if resolution % IMAGE_SIZE_STEP != 0:
+            raise ValueError(
+                f"resolution 必须是 {IMAGE_SIZE_STEP} 的倍数 (得到 {resolution})"
+            )
+        # 数据 pipeline (transforms pad 到 resolution) 与模型构建 (RoPE 预计算网格)
+        # 都要改, 否则 token 数不匹配
+        overrides.append(f"scratch.resolution={resolution}")
+        overrides.append(f"++trainer.model.image_size={resolution}")
+
+    # 任意 Hydra 覆盖, 原样透传
+    overrides.extend(str(o) for o in train_cfg.get("overrides") or [])
+
+    return _dedupe_overrides(overrides)
+
+
 # ─── Main training orchestration ────────────────────────────────────────────
 
 
@@ -136,6 +217,9 @@ def train(config: Dict) -> None:
     qos = get_nested_value(config, "train", "qos")
     num_gpus = get_nested_value(config, "train", "num_gpus")
     num_nodes = get_nested_value(config, "train", "num_nodes")
+    gpu_ids = get_nested_value(config, "train", "gpu_ids")
+    if gpu_ids and num_gpus is None:
+        num_gpus = len(gpu_ids)
 
     train_script = SAM3_ROOT / "sam3" / "train" / "train.py"
     if not train_script.exists():
@@ -145,6 +229,7 @@ def train(config: Dict) -> None:
         )
 
     sam3_config = resolve_hydra_config(sam3_config)
+    hydra_overrides = build_hydra_overrides(config.get("train") or {})
 
     cmd = [sys.executable, str(train_script), "-c", sam3_config]
 
@@ -160,6 +245,8 @@ def train(config: Dict) -> None:
         cmd += ["--num-gpus", str(num_gpus)]
     if num_nodes is not None:
         cmd += ["--num-nodes", str(num_nodes)]
+    # 任意 Hydra 覆盖 (后端 train.py 以 parse_known_args 收集并传给 compose)
+    cmd += hydra_overrides
 
     print(f"\n{'='*60}")
     print("SAM 3 训练")
@@ -168,10 +255,14 @@ def train(config: Dict) -> None:
     print(f"训练脚本: {train_script}")
     if use_cluster is not None:
         print(f"集群模式: {'SLURM' if use_cluster else '本地'}")
+    if gpu_ids:
+        print(f"GPU: {','.join(str(g) for g in gpu_ids)}")
     if num_gpus is not None:
         print(f"GPU 数: {num_gpus}")
     if num_nodes is not None:
         print(f"节点数: {num_nodes}")
+    if hydra_overrides:
+        print(f"Hydra overrides: {' '.join(hydra_overrides)}")
     print(f"{'='*60}\n")
     print(f"执行命令: {' '.join(cmd)}\n")
 
@@ -179,6 +270,8 @@ def train(config: Dict) -> None:
     # (即使未执行 pip install -e sam3)
     env = os.environ.copy()
     env["PYTHONPATH"] = str(SAM3_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    if gpu_ids:
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in gpu_ids)
     subprocess.run(cmd, check=True, env=env)
 
 
@@ -196,6 +289,20 @@ def main():
             if v is not None:
                 key = "config" if field == "sam3_config" else field
                 train_cfg[key] = v
+        if args.pretrained is not None:
+            train_cfg["pretrained"] = args.pretrained  # 字符串形式在 build 阶段归一化
+        if args.batch_size is not None:
+            train_cfg["batch_size"] = args.batch_size
+        if args.max_epochs is not None:
+            train_cfg["max_epochs"] = args.max_epochs
+        if args.resolution is not None:
+            train_cfg["resolution"] = args.resolution
+        if args.gpu_ids is not None:
+            train_cfg["gpu_ids"] = [int(x) for x in args.gpu_ids.split(",") if x.strip()]
+        if args.override:
+            # 与 YAML 的 overrides 合并 (CLI 在后, 同键时 CLI 生效)
+            yaml_overrides = get_nested_value(config, "train", "overrides") or []
+            train_cfg["overrides"] = [*yaml_overrides, *args.override]
         if train_cfg:
             config.setdefault("train", {}).update(train_cfg)
 
