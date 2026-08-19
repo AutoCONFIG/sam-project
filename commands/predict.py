@@ -87,7 +87,7 @@ Examples:
     parser.add_argument("--checkpoint", "-c", type=str, default=None,
                         help="模型权重路径 (sam3.1_multiplex.pt 或 sam3.pt)")
     parser.add_argument("--input", "-i", type=str, default=None,
-                        help="输入视频文件或 jpg 帧目录")
+                        help="输入视频文件或图片帧目录")
     parser.add_argument("--output", "-o", type=str, default=None,
                         help="输出目录")
     parser.add_argument("--text", "-t", type=str, default=None,
@@ -134,7 +134,6 @@ def args_to_config(args: argparse.Namespace) -> Dict[str, Any]:
         args,
         plain=("version", "checkpoint", "image_size", "frame_index"),
         boolean=("use_fa3", "use_rope_real", "compile"),
-        rename={"version": "version", "checkpoint": "checkpoint", "image_size": "image_size", "frame_index": "frame_index"},
     )
     if model_cfg:
         config["model"] = model_cfg
@@ -426,10 +425,10 @@ def process_unit(
 
     # ── Compose videos (video input only) ───────────────────────────────
     if unit.kind == "video":
-        if save_vis and vis_frames:
+        if save_video and save_vis and vis_frames:
             _write_video(tree.vis / f"{tree.stem}.mp4", vis_frames, fps)
             print(f"  可视化视频: {tree.vis / f'{tree.stem}.mp4'}")
-        if save_masks and mask_frames:
+        if save_video and save_masks and mask_frames:
             _write_video(tree.masks / f"{tree.stem}.mp4", mask_frames, fps)
             print(f"  mask 视频: {tree.masks / f'{tree.stem}.mp4'}")
     else:

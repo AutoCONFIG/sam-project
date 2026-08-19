@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-import shutil
 from pathlib import Path
 from typing import Generator
 
@@ -31,13 +30,13 @@ import numpy as np
 # Reduce CUDA memory fragmentation (must be set before torch import).
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
-from core.visualization import draw_mask_overlay
 from utils.constants import (
     DEFAULT_IMAGE_SIZE,
     DEFAULT_USE_FA3,
     DEFAULT_USE_ROPE_REAL,
     DEFAULT_COMPILE,
     DEFAULT_MODEL_VERSION,
+    IMAGE_EXT,
 )
 
 
@@ -74,15 +73,19 @@ class Sam3VideoPredictor:
     ):
         from sam3.model_builder import build_sam3_predictor
 
-        self._predictor = build_sam3_predictor(
+        build_kwargs = dict(
             checkpoint_path=checkpoint,
             version=version,
             use_fa3=use_fa3,
             use_rope_real=use_rope_real,
             compile=compile,
             warm_up=compile,
-            image_size=image_size,
         )
+        if version == "sam3.1":
+            # image_size 参数化仅 sam3.1 (multiplex) 支持; sam3 原版的
+            # Sam3VideoPredictor.__init__ 不接受该参数, 传入会 TypeError
+            build_kwargs["image_size"] = image_size
+        self._predictor = build_sam3_predictor(**build_kwargs)
 
         import torch as _torch
         _torch.cuda.empty_cache()
@@ -192,9 +195,8 @@ def get_frames(input_path: str):
     """
     p = Path(input_path)
     if p.is_dir():
-        exts = {".jpg", ".jpeg", ".png", ".bmp"}
         files = sorted(
-            [f for f in p.iterdir() if f.suffix.lower() in exts],
+            [f for f in p.iterdir() if f.suffix.lower() in IMAGE_EXT],
             key=lambda x: x.name,
         )
         if not files:
@@ -230,48 +232,3 @@ def write_frames_to_temp_dir(frames: list[np.ndarray]) -> str:
     for i, fr in enumerate(frames):
         cv2.imwrite(str(tmp_dir / f"{i:08d}.jpg"), cv2.cvtColor(fr, cv2.COLOR_RGB2BGR))
     return str(tmp_dir)
-
-
-def save_frame_results(
-    frame_idx: int,
-    frame_rgb: np.ndarray,
-    outputs: dict,
-    out_dir: Path,
-    save_vis: bool,
-    save_masks: bool,
-) -> None:
-    """Save visualization overlay and/or mask data for a single frame.
-
-    Masks are saved as compressed npz containing:
-        - ``label_map``: (H, W) int32, 0=background, obj_id+1=object
-        - ``meta``: array of dicts with obj_id, score, box_xywh
-    """
-    obj_ids = outputs.get("out_obj_ids", [])
-    masks = outputs.get("out_binary_masks", [])
-    probs = outputs.get("out_probs", [])
-    boxes = outputs.get("out_boxes_xywh", [])
-
-    if save_masks:
-        h, w = frame_rgb.shape[:2]
-        label_map = np.zeros((h, w), dtype=np.int32)
-        meta = []
-        for i, (oid, m) in enumerate(zip(obj_ids, masks)):
-            m = np.asarray(m).astype(bool)
-            if m.shape != (h, w):
-                m = cv2.resize(m.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST).astype(bool)
-            real_id = int(oid) if oid is not None else i
-            label_map[m] = real_id + 1  # 0 reserved for background
-            meta.append({
-                "obj_id": real_id,
-                "score": float(probs[i]) if i < len(probs) else None,
-                "box_xywh": [float(v) for v in boxes[i]] if i < len(boxes) else None,
-            })
-        np.savez_compressed(
-            out_dir / "masks" / f"{frame_idx:06d}.npz",
-            label_map=label_map,
-            meta=np.array(meta, dtype=object),
-        )
-
-    if save_vis:
-        vis = draw_mask_overlay(frame_rgb, obj_ids, masks, probs, boxes)
-        cv2.imwrite(str(out_dir / "vis" / f"{frame_idx:06d}.jpg"), vis)

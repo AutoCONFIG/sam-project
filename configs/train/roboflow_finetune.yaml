@@ -1,0 +1,12 @@
+# SAM 3 训练配置示例 (转发到 sam3 子模块的 Hydra 训练系统)
+# 用法: python sam.py configs/train/roboflow_finetune.yaml
+mode: train
+train:
+  # 训练配置路径, 前端视角 (相对于项目根或绝对路径):
+  #   子模块参考配置: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
+  #   前端自定义配置: 放在 configs/train/hydra/ 下, 如 configs/train/hydra/my_ft.yaml
+  #                  (启动时自动同步进子模块 sam3/sam3/train/configs/_custom/)
+  config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
+  use_cluster: 0    # 0=本地, 1=SLURM 集群 (后端参考配置默认 1, 本地必须显式设 0)
+  num_gpus: 4       # 每节点 GPU 数, 按机器调整
+  num_nodes: 1      # 节点数

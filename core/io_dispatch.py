@@ -13,8 +13,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from core.labels import VIDEO_EXT
-
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+from utils.constants import IMAGE_EXT
 
 
 @dataclass

@@ -175,8 +175,6 @@ class LabelExporter:
             fa.objects.append((int(oid) if oid is not None else i, cid,
                                polygon, [float(v) for v in box], score))
 
-        self._frames.append(fa)
-
     # ─── COCO ────────────────────────────────────────────────────────────
 
     def write_coco(self, path: str | Path) -> None:

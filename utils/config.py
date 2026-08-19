@@ -8,7 +8,6 @@ Functions:
     load_yaml_config: Load configuration from YAML file.
     merge_configs: Merge override args into base config (CLI wins).
     get_nested_value: Safely get nested value from config dict.
-    resolve_config_value: Resolve a value from a priority chain of config sections.
     to_bool: Convert 'true'/'false' string to bool.
     set_boolean_argument: Add paired --flag/--no-flag CLI arguments.
     config_from_args: Extract config dict from argparse namespace.
@@ -106,19 +105,6 @@ def get_nested_value(config: Dict, *keys, default=None):
         else:
             return default
     return current
-
-
-def resolve_config_value(config: Dict, *chain, default=None):
-    """按优先级链查找配置值，返回第一个非 None 的结果。
-
-    chain 中每个元素为 (section, key) 元组，按传入顺序依次查找。
-    若全部未命中则返回 default。
-    """
-    for section, key in chain:
-        v = get_nested_value(config, section, key)
-        if v is not None:
-            return v
-    return default
 
 
 def to_bool(value: str | bool | None) -> bool | None:

@@ -12,6 +12,12 @@ from typing import Final
 
 DEFAULT_PREDICT_OUTPUT: Final[str] = "runs/predict"
 
+# Image extensions accepted by both input scanning (core/io_dispatch.py) and
+# frame loading (core/engine.py) — single source of truth to keep them aligned.
+IMAGE_EXT: Final[frozenset] = frozenset(
+    {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Model defaults
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -41,7 +47,7 @@ DEFAULT_FRAME_INDEX: Final[int] = 0
 
 DEFAULT_SAVE_VIS: Final[bool] = True
 DEFAULT_SAVE_MASKS: Final[bool] = True
-DEFAULT_SAVE_VIDEO: Final[bool] = False
+DEFAULT_SAVE_VIDEO: Final[bool] = True
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Label export defaults

@@ -92,19 +92,38 @@ sam-project/
 - ❌ 点/框提示：predict 命令只有 `--text`，没有 `--points`/`--boxes`（SAM3 API 支持，只是没暴露）
 - ❌ 实际推理流程尚未端到端验证（代码重构完成，待跑通 sam3.1 + 672）
 
-### 3.3 训练 (train) — ⚠️ 60%
+**前后端对齐审计修复（2026-08-19）：**
+- ✅ 修复 `version="sam3"` 必崩：engine 无条件传 `image_size`，而 sam3 原版 `Sam3VideoPredictor.__init__` 不接受该参数 → 现在仅 sam3.1 传
+- ✅ 修复 `LabelExporter.add_frame` 重复 append 同一 FrameAnnotations（COCO 输出 images/annotations 整倍重复）
+- ✅ 接通 `save_video`（原来解析后从未使用）；`DEFAULT_SAVE_VIDEO` 改为 True，与文档/示例 YAML 一致
+- ✅ 统一图片扩展名集合到 `utils/constants.IMAGE_EXT`（原 io_dispatch 7 种 vs engine.get_frames 4 种不一致，webp/tiff 目录会扫描后加载失败）
+- ✅ 删除死代码 `engine.save_frame_results`（重构残留，npz 格式与现行实现不一致）、`utils/config.resolve_config_value`（无人调用）、predict 恒等 rename 映射
+- ✅ 已核验对齐：session 请求类型/字段、add_prompt 与 propagate 的 `{"frame_index", "outputs"` 返回结构、`out_obj_ids/out_binary_masks/out_boxes_xywh/out_probs` 输出键、multiplex predictor 继承 Sam3BasePredictor API 一致
+- ⚠️ 已知未改：`sam3` 路径下 `use_fa3`/`use_rope_real` 被 `build_sam3_predictor` 吸收但不转发（静默无效）；`frame_index` 可从 `model.` 或 `prompt.` 两处读取（重复配置路径，行为兼容）
+
+### 3.3 训练 (train) — ⚠️ 70%
 
 **已实现：**
 - `commands/train.py` 通过 subprocess 调用 `sam3/sam3/train/train.py -c <hydra_config>`
 - CLI 参数透传（`--num-gpus`, `--use-cluster`, `--partition`, `--account`, `--qos`, `--num-nodes`）
 - SAM3 Hydra 训练脚本存在，依赖已安装（hydra 1.3.5, submitit）
 - 15+ 个 Hydra 训练配置文件存在于 `sam3/sam3/train/configs/`（roboflow_v100, odinw13, saco_video_evals 等）
+- ✅ 前端配置示例 `configs/train/roboflow_finetune.yaml`；`train.config` 支持前端相对/绝对路径（子模块外的自定义配置启动时自动同步到 `sam3/sam3/train/configs/_custom/`，已在子模块 .gitignore 忽略）
+- ✅ subprocess 透传 `PYTHONPATH=<sam3 子模块>`，未 `pip install -e sam3` 也能 import
+- ✅ `build_sam3_image_model(image_size=...)` 训练链路分辨率参数化（须为 336 倍数）
+
+**后端机制备忘（2026-08-19 代码走读确认）：**
+- 后端 `-c` 是 Hydra config 名，相对于 `sam3/sam3/train/`（`initialize_config_module` 限制，配置必须在子模块内）；前端已屏蔽此细节——`train.config` 写前端相对路径即可，子模块外的配置自动同步进 `configs/_custom/`
+- 参考配置默认 `submitit.use_cluster: True`（本地必须显式 `--use-cluster 0`）且 `trainer.skip_saving_ckpts: true`（微调必须改 false，否则不存 checkpoint）
+- 预训练权重：`trainer.model.checkpoint_path` 指向本地 .pt；不配则 `load_from_HF=True` 默认从 HF 下载 sam3 原版（gated repo 需 token）
+- 数据格式为 COCO（img_folder + `_annotations.coco.json`），文本 prompt = `categories[].name`；只支持图片级训练（video dataset 类存在但无训练配置）
+- odinw 配置里的 `freeze_*` / `use_act_checkpoint_*` 键无代码消费，是死配置——开箱只支持全量微调
+- 前端无法透传任意 Hydra override（后端 argparse 用 `parse_args`），改路径/超参需直接编辑子模块里的 Hydra 配置
 
 **缺失项：**
 - ❌ **没有实际跑通过训练**：只是 subprocess 转发，未验证端到端
-- ❌ **没有训练用 YAML 配置示例**：`configs/train/` 只有 README，没有实际 `.yaml`
-- ❌ **没有微调工作流**：用户需要"预训练+微调"，当前只转发到 SAM3 原始训练系统
-- ❌ **没有 checkpoint 管理**：训练产出 → 推理加载的衔接缺失
+- ❌ **没有自定义数据 Hydra 配置模板**：需复制 roboflow 配置改 paths/supercategory/skip_saving_ckpts/use_cluster
+- ❌ **没有 checkpoint 管理**：训练产出（image model 裸 state_dict）→ sam3.1 multiplex 推理（需 `detector./tracker.` 前缀）的键重映射缺失
 
 ### 3.4 ONNX 导出 — 📄 计划已存，暂不实现
 
@@ -142,6 +161,12 @@ fork 的 main 分支包含以下修改（commit `bfa05a7`）：
 2. **`sam3/model/sam3_base_predictor.py`** — `start_session` 用 `inspect` 过滤 `init_state` 不接受的 kwargs
 
 3. **`infer_video.py`** — 独立推理脚本（sam-project 的 `core/engine.py` 是它的工程化重构）
+
+4. **`sam3/model_builder.py`** — 训练链路（image model）分辨率参数化（2026-08-19）：
+   - `_create_vision_backbone(img_size=1008)` 贯穿 `position_encoding` 与 `_create_vit_backbone`
+   - `build_sam3_image_model(image_size=1008)`（原 3 个 `_create_vision_backbone` 调用方不受影响，默认 1008）
+   - `image_size != 1008` 时 `_load_checkpoint(drop_rope_buffers=True)` 过滤 `freqs_cis*` buffer
+   - 训练侧用法：Hydra 配置里 `trainer.model.image_size` 与 `scratch.resolution` 一起改
 
 ## 6. 环境信息
 
