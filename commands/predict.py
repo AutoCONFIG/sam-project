@@ -1,10 +1,12 @@
 """
 SAM 3 Prediction / Inference Module
 =====================================
-Video inference dispatched by the unified YAML entry point.
+Video / image-sequence inference dispatched by the unified YAML entry point.
 
-Supports text prompts for open-vocabulary segmentation and tracking
-across all frames of a video or image sequence.
+Supports text prompts for open-vocabulary segmentation and tracking. Output
+mirrors the input form: a video in yields a video out (+ mask video + labels),
+an image directory in yields a parallel image directory (+ mask images +
+labels). COCO and YOLO (det + seg) labels are exported per input.
 
 Usage::
 
@@ -16,16 +18,24 @@ import shutil
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import cv2
+import numpy as np
 
 from core.engine import (
     Sam3VideoPredictor,
     get_frames,
-    save_frame_results,
     write_frames_to_temp_dir,
 )
+from core.io_dispatch import (
+    InputUnit,
+    OutputTree,
+    discover_inputs,
+    resolve_output_tree,
+)
+from core.labels import LabelExporter
+from core.visualization import draw_mask_overlay
 from utils.config import (
     config_from_args,
     get_nested_value,
@@ -39,7 +49,10 @@ from utils.constants import (
     DEFAULT_COMPILE,
     DEFAULT_FRAME_INDEX,
     DEFAULT_IMAGE_SIZE,
+    DEFAULT_LABEL_FORMATS,
+    DEFAULT_MODEL_VERSION,
     DEFAULT_PREDICT_OUTPUT,
+    DEFAULT_SAVE_LABELS,
     DEFAULT_SAVE_MASKS,
     DEFAULT_SAVE_VIDEO,
     DEFAULT_SAVE_VIS,
@@ -56,19 +69,23 @@ setup_sam3_path()
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="SAM 3.1 视频推理",
+        description="SAM 3 / 3.1 视频推理",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
     python sam.py configs/predict/video_text.yaml
     python -m commands.predict --config configs/predict/video_text.yaml --text "person"
-    python -m commands.predict -c /path/to/sam3.1_multiplex.pt -i video.mp4 -t "person" --image-size 672
+    python -m commands.predict -c /path/to/sam3.1_multiplex.pt --version sam3.1 -i video.mp4 -t "person" --image-size 672
+    python -m commands.predict -c /path/to/sam3.pt --version sam3 -i video.mp4 -t "person"
         """,
     )
 
     parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
+    parser.add_argument("--version", type=str, default=None,
+                        choices=["sam3", "sam3.1"],
+                        help=f"模型版本 (默认 {DEFAULT_MODEL_VERSION}; sam3 固定 image_size=1008)")
     parser.add_argument("--checkpoint", "-c", type=str, default=None,
-                        help="sam3.1_multiplex.pt 路径")
+                        help="模型权重路径 (sam3.1_multiplex.pt 或 sam3.pt)")
     parser.add_argument("--input", "-i", type=str, default=None,
                         help="输入视频文件或 jpg 帧目录")
     parser.add_argument("--output", "-o", type=str, default=None,
@@ -94,11 +111,17 @@ Examples:
                          help_true="保存可视化叠加图 (默认)",
                          help_false="不保存可视化")
     set_boolean_argument(parser, "save_masks", "save-masks",
-                         help_true="保存 mask npz (默认)",
+                         help_true="保存 mask (默认)",
                          help_false="不保存 mask")
     set_boolean_argument(parser, "save_video", "save-video",
-                         help_true="把 vis 合成 mp4",
-                         help_false="不合成 mp4 (默认)")
+                         help_true="视频输入时合成 mp4 (默认)",
+                         help_false="不合成 mp4")
+    set_boolean_argument(parser, "save_labels", "save-labels",
+                         help_true="导出 COCO/YOLO 标签 (默认)",
+                         help_false="不导出标签")
+    parser.add_argument("--label-format", type=str, default=None, nargs="+",
+                        choices=["coco", "yolo"],
+                        help=f"标签格式, 可多选 (默认 {'/'.join(DEFAULT_LABEL_FORMATS)})")
 
     return parser.parse_args()
 
@@ -109,17 +132,17 @@ def args_to_config(args: argparse.Namespace) -> Dict[str, Any]:
 
     model_cfg = config_from_args(
         args,
-        plain=("checkpoint", "image_size", "frame_index"),
+        plain=("version", "checkpoint", "image_size", "frame_index"),
         boolean=("use_fa3", "use_rope_real", "compile"),
-        rename={"checkpoint": "checkpoint", "image_size": "image_size", "frame_index": "frame_index"},
+        rename={"version": "version", "checkpoint": "checkpoint", "image_size": "image_size", "frame_index": "frame_index"},
     )
     if model_cfg:
         config["model"] = model_cfg
 
     io_cfg = config_from_args(
         args,
-        plain=("input", "output"),
-        boolean=("save_vis", "save_masks", "save_video"),
+        plain=("input", "output", "label_format"),
+        boolean=("save_vis", "save_masks", "save_video", "save_labels"),
     )
     if io_cfg:
         config["io"] = io_cfg
@@ -135,8 +158,14 @@ def args_to_config(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def predict(config: Dict) -> None:
-    """运行 SAM 3.1 视频推理。"""
-    # Extract config values
+    """运行 SAM 3 / 3.1 视频/图像序列推理。
+
+    输入形态决定输出形态: 视频进→视频出, 图片目录进→镜像结构图片目录出。
+    每路输入额外输出 mask 和标签 (COCO + YOLO)。模型只构建一次, 顺序处理
+    多个输入单元 (session 复用)。
+    """
+    # ── Extract config ──────────────────────────────────────────────────
+    version = get_nested_value(config, "model", "version", default=DEFAULT_MODEL_VERSION)
     checkpoint = get_nested_value(config, "model", "checkpoint")
     image_size = get_nested_value(config, "model", "image_size", default=DEFAULT_IMAGE_SIZE)
     use_fa3 = get_nested_value(config, "model", "use_fa3", default=DEFAULT_USE_FA3)
@@ -148,6 +177,10 @@ def predict(config: Dict) -> None:
     save_vis = get_nested_value(config, "io", "save_vis", default=DEFAULT_SAVE_VIS)
     save_masks = get_nested_value(config, "io", "save_masks", default=DEFAULT_SAVE_MASKS)
     save_video = get_nested_value(config, "io", "save_video", default=DEFAULT_SAVE_VIDEO)
+    save_labels = get_nested_value(config, "io", "save_labels", default=DEFAULT_SAVE_LABELS)
+    label_formats = get_nested_value(
+        config, "io", "label_format", default=list(DEFAULT_LABEL_FORMATS),
+    )
 
     text = get_nested_value(config, "prompt", "text")
     frame_index = get_nested_value(
@@ -155,107 +188,323 @@ def predict(config: Dict) -> None:
         default=get_nested_value(config, "prompt", "frame_index", default=DEFAULT_FRAME_INDEX),
     )
 
-    # Validate
+    # ── Parse class prompts ─────────────────────────────────────────────
+    # prompt.text 统一作为类别列表处理。单类别写 ["person"], 多类别写
+    # ["person", "car", ...]。多类别是逐类别独立推理 (SAM3 架构不支持一次
+    # session 检测多个不同类别, 每次 text prompt 都 reset session)。
+    # 为兼容旧的字符串写法, 字符串会被自动包成单元素列表。
+    if isinstance(text, str):
+        text = [text]
+    classes: List[str] = [t.strip() for t in (text or []) if t and t.strip()]
+
+    # ── Validate ────────────────────────────────────────────────────────
     if not checkpoint:
         raise ValueError("--checkpoint 或配置 model.checkpoint 是必需的")
     if not input_path:
         raise ValueError("--input 或配置 io.input 是必需的")
-    if not text:
+    if not classes or not classes[0]:
         raise ValueError("--text 或配置 prompt.text 是必需的")
     if image_size % IMAGE_SIZE_STEP != 0:
         raise ValueError(
             f"image_size 必须是 {IMAGE_SIZE_STEP} 的倍数 (得到 {image_size})"
         )
+    # sam3 (base) 不支持 image_size 参数化, 后端固定 1008
+    if version == "sam3" and image_size != 1008:
+        raise ValueError(
+            f"sam3 原版不支持自定义 image_size (后端固定 1008), 得到 {image_size}; "
+            f"如需低分辨率请用 sam3.1"
+        )
 
-    out_dir = Path(output_path)
-    if save_vis:
-        (out_dir / "vis").mkdir(parents=True, exist_ok=True)
-    if save_masks:
-        (out_dir / "masks").mkdir(parents=True, exist_ok=True)
+    # ── Scan inputs ─────────────────────────────────────────────────────
+    units = discover_inputs(input_path)
+    if not units:
+        raise ValueError(f"输入路径下没有可处理的视频或图片: {input_path}")
 
     print(f"\n{'='*60}")
-    print("SAM 3.1 视频推理")
+    print(f"SAM {version} 推理")
     print(f"{'='*60}")
     print(f"模型权重: {checkpoint}")
-    print(f"推理分辨率: {image_size} (backbone ViT 用预训练位置编码, tile_abs_pos 自动适配)")
-    print(f"Flash Attention 3: {use_fa3}")
-    print(f"实数 RoPE: {use_rope_real}")
-    print(f"torch.compile: {compile_model}")
-    print(f"文本提示: '{text}' @ 帧 {frame_index}")
+    if version == "sam3.1":
+        print(f"推理分辨率: {image_size}")
+    else:
+        print(f"推理分辨率: 1008 (sam3 原版固定)")
+    print(f"Flash Attention 3: {use_fa3} | 实数 RoPE: {use_rope_real} | torch.compile: {compile_model}")
+    print(f"类别: {classes} @ 帧 {frame_index}")
+    print(f"输入单元: {len(units)} 个")
+    for i, u in enumerate(units):
+        kind_label = "视频" if u.kind == "video" else f"图片序列({len(u.frames)}张)"
+        loc = str(u.source) if u.kind == "video" else str(u.source)
+        print(f"  [{i+1}] {kind_label}: {loc}")
     print(f"{'='*60}\n")
 
-    # Load frames
-    print(f"加载视频/帧: {input_path}")
-    frames, fps, n = get_frames(input_path)
-    print(f"共 {n} 帧, fps={fps}")
-    if n == 0:
-        print("错误: 没有帧可处理")
-        sys.exit(1)
-
-    # Build model
-    print(f"构建模型 (use_fa3={use_fa3})...")
+    # ── Build model once ────────────────────────────────────────────────
+    print(f"构建模型 (version={version}, use_fa3={use_fa3})...")
     engine = Sam3VideoPredictor(
         checkpoint=checkpoint,
+        version=version,
         image_size=image_size,
         use_fa3=use_fa3,
         use_rope_real=use_rope_real,
         compile=compile_model,
     )
-    print(f"模型构建完成 (image_size={image_size})")
+    print(f"模型构建完成\n")
 
-    # Run inference
-    # SAM3 start_session needs a disk path, so write frames to a temp dir
+    # ── Process each unit ───────────────────────────────────────────────
+    for idx, unit in enumerate(units):
+        tree = resolve_output_tree(output_path, unit)
+        print(f"[{idx+1}/{len(units)}] 处理 {unit.kind}: {unit.source}")
+        process_unit(
+            engine=engine,
+            unit=unit,
+            tree=tree,
+            classes=classes,
+            frame_index=frame_index,
+            save_vis=save_vis,
+            save_masks=save_masks,
+            save_video=save_video,
+            save_labels=save_labels,
+            label_formats=label_formats,
+        )
+        print()
+
+
+def process_unit(
+    engine: Sam3VideoPredictor,
+    unit: InputUnit,
+    tree: OutputTree,
+    classes: List[str],
+    frame_index: int,
+    save_vis: bool,
+    save_masks: bool,
+    save_video: bool,
+    save_labels: bool,
+    label_formats: List[str],
+) -> None:
+    """Process a single input unit: load frames → session → per-class inference.
+
+    Output mirrors the input kind:
+      - video  → vis/<stem>.mp4, masks/<stem>.mp4, masks_npz/*.npz, labels/
+      - image_seq → vis/*.jpg, masks/*.png, masks_npz/*.npz, labels/
+
+    Multi-class: SAM3 cannot detect multiple distinct classes in one session
+    (each text prompt resets the session). So each class runs its own
+    inference, reusing ONE session so frames are loaded only once; between
+    classes we reset_session (clears prompt/tracker, keeps frames) to avoid
+    re-writing temp jpgs and re-loading frames. Backbone features are still
+    recomputed per class (reset clears the feature cache) — that's inherent
+    to the architecture. Object ids are offset per class to avoid collisions.
+    Single class is just the N=1 case of this loop.
+    """
+    # ── Load frames ─────────────────────────────────────────────────────
+    if unit.kind == "video":
+        frames, fps, n = get_frames(str(unit.source))
+        if not fps:
+            fps = 25.0
+    else:  # image_seq
+        frames, _fps, n = get_frames(str(unit.source))
+        fps = None
+
+    if n == 0:
+        print("  跳过: 没有帧")
+        return
+    print(f"  共 {n} 帧, fps={fps}")
+
+    h, w = frames[0].shape[:2]
+
+    # ── Label exporter for this unit (handles multiple classes) ─────────
+    # Use the first class as default; add_frame() takes an explicit class_name
+    # so each class's objects land under the right category.
+    exporter = LabelExporter(class_name=classes[0], predefined_classes=classes) if save_labels else None
+
+    # ── Run inference ───────────────────────────────────────────────────
+    # frame_results[fi] = list of (class_name, obj_id, mask, box, prob)
+    frame_results: Dict[int, List[tuple]] = {i: [] for i in range(n)}
+
     tmp_dir = write_frames_to_temp_dir(frames)
     try:
-        print(f"帧已写入临时目录: {tmp_dir}")
-
         session_id = engine.start_session(resource_path=tmp_dir, offload_video_to_cpu=True)
-        print(f"session: {session_id} (offload_video_to_cpu=True)")
+        for ci, cls in enumerate(classes):
+            if ci > 0:
+                # reset before switching to a new text class (SAM3 requires
+                # reset_state between text prompts, else results are wrong)
+                engine.reset_session(session_id)
+            outputs = engine.add_text_prompt(session_id, frame_index, cls)
+            n_obj = len(outputs.get("out_obj_ids", []))
+            print(f"  [{ci+1}/{len(classes)}] '{cls}': 帧 {frame_index} 检测到 {n_obj} 个对象")
 
-        # Add text prompt
-        outputs = engine.add_text_prompt(session_id, frame_index, text)
-        n_obj = len(outputs.get("out_obj_ids", []))
-        print(f"帧 {frame_index} 检测到 {n_obj} 个对象 '{text}'")
+            # Collect this class's per-frame results
+            cls_outputs: Dict[int, dict] = {frame_index: outputs}
+            for fi, out in engine.propagate(session_id):
+                if fi == frame_index:
+                    continue
+                cls_outputs[fi] = out
 
-        # Save prompt frame result
-        save_frame_results(frame_index, frames[frame_index], outputs, out_dir, save_vis, save_masks)
-
-        # Propagate to all frames
-        print("传播到全部帧 ...")
-        total = n_obj
-        for fi, outputs in engine.propagate(session_id):
-            if fi >= len(frames) or fi == frame_index:
-                continue
-            save_frame_results(fi, frames[fi], outputs, out_dir, save_vis, save_masks)
-            n_obj_i = len(outputs.get("out_obj_ids", []))
-            total += n_obj_i
-            if fi % 20 == 0 or fi == n - 1:
-                print(f"  帧 {fi}/{n-1}: {n_obj_i} 对象")
-
+            for fi, out in cls_outputs.items():
+                if fi >= n:
+                    continue
+                obj_ids = out.get("out_obj_ids", [])
+                masks = out.get("out_binary_masks", [])
+                boxes = _denormalize_boxes(out.get("out_boxes_xywh", []), w, h)
+                probs = out.get("out_probs", [])
+                # offset obj_id by class index to avoid cross-class collisions
+                id_offset = ci * 100000
+                for i, oid in enumerate(obj_ids):
+                    frame_results[fi].append((
+                        cls,
+                        (int(oid) if oid is not None else i) + id_offset,
+                        masks[i] if i < len(masks) else None,
+                        boxes[i] if i < len(boxes) else None,
+                        float(probs[i]) if i < len(probs) else 0.0,
+                    ))
+            print(f"  [{ci+1}/{len(classes)}] '{cls}' 完成")
         engine.close_session(session_id)
-
-        print(f"\n完成。总对象-帧数: {total}")
-        if save_vis:
-            print(f"可视化: {out_dir / 'vis'}")
-        if save_masks:
-            print(f"mask:   {out_dir / 'masks'}")
-
-        # Optionally compose video
-        if save_video and fps:
-            vis_files = sorted((out_dir / "vis").glob("*.jpg"))
-            if vis_files:
-                h, w = frames[0].shape[:2]
-                vw = cv2.VideoWriter(
-                    str(out_dir / "result.mp4"),
-                    cv2.VideoWriter_fourcc(*"mp4v"),
-                    fps, (w, h),
-                )
-                for vf in vis_files:
-                    vw.write(cv2.imread(str(vf)))
-                vw.release()
-                print(f"视频: {out_dir / 'result.mp4'}")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # ── Write per-frame outputs ─────────────────────────────────────────
+    vis_frames: List[np.ndarray] = []
+    mask_frames: List[np.ndarray] = []
+    total = 0
+
+    for fi in sorted(frame_results.keys()):
+        if fi >= n or not frame_results[fi]:
+            continue
+        frame_rgb = frames[fi]
+        # split per-class results for this frame into parallel lists
+        cls_names, obj_ids, masks, boxes, probs = [], [], [], [], []
+        for cn, oid, m, bx, pr in frame_results[fi]:
+            cls_names.append(cn)
+            obj_ids.append(oid)
+            masks.append(m)
+            boxes.append(bx)
+            probs.append(pr)
+        total += len(obj_ids)
+
+        # labels — register objects grouped by class name
+        if exporter is not None:
+            name = f"{fi:06d}.jpg"
+            for cn in dict.fromkeys(cls_names):  # unique, order-preserving
+                idxs = [i for i, c in enumerate(cls_names) if c == cn]
+                exporter.add_frame(
+                    fi, name, h, w,
+                    [obj_ids[i] for i in idxs],
+                    [masks[i] for i in idxs],
+                    [boxes[i] for i in idxs],
+                    [probs[i] for i in idxs],
+                    class_name=cn,
+                )
+
+        # mask image (color label map) + npz
+        if save_masks:
+            mask_img = _render_label_map(obj_ids, masks, h, w)
+            np.savez_compressed(
+                tree.npz / f"{fi:06d}.npz",
+                label_map=mask_img,
+                meta=np.array([
+                    {"obj_id": obj_ids[i],
+                     "class": cls_names[i],
+                     "score": probs[i],
+                     "box_xywh": [float(v) for v in boxes[i]] if boxes[i] else None}
+                    for i in range(len(obj_ids))
+                ], dtype=object),
+            )
+            if unit.kind == "video":
+                mask_frames.append(mask_img)
+            else:
+                cv2.imwrite(str(tree.masks / f"{fi:06d}.png"), mask_img)
+
+        # vis image
+        if save_vis:
+            vis = draw_mask_overlay(frame_rgb, obj_ids, masks, probs, boxes)
+            if unit.kind == "video":
+                vis_frames.append(vis)
+            else:
+                cv2.imwrite(str(tree.vis / f"{fi:06d}.jpg"), vis)
+
+        if fi % 20 == 0 or fi == n - 1:
+            print(f"  帧 {fi}/{n-1}: {len(obj_ids)} 对象")
+
+    # ── Compose videos (video input only) ───────────────────────────────
+    if unit.kind == "video":
+        if save_vis and vis_frames:
+            _write_video(tree.vis / f"{tree.stem}.mp4", vis_frames, fps)
+            print(f"  可视化视频: {tree.vis / f'{tree.stem}.mp4'}")
+        if save_masks and mask_frames:
+            _write_video(tree.masks / f"{tree.stem}.mp4", mask_frames, fps)
+            print(f"  mask 视频: {tree.masks / f'{tree.stem}.mp4'}")
+    else:
+        if save_vis:
+            print(f"  可视化: {tree.vis}")
+        if save_masks:
+            print(f"  mask: {tree.masks}")
+
+    if save_masks:
+        print(f"  mask npz: {tree.npz}")
+
+    # ── Write labels ────────────────────────────────────────────────────
+    if exporter is not None:
+        if "coco" in label_formats:
+            coco_path = tree.labels / f"{tree.stem}_coco.json"
+            exporter.write_coco(coco_path)
+            print(f"  COCO 标签: {coco_path}")
+        if "yolo" in label_formats:
+            exporter.write_yolo(tree.labels / f"{tree.stem}_yolo")
+            print(f"  YOLO 标签: {tree.labels / f'{tree.stem}_yolo'}")
+
+    print(f"  完成。总对象-帧数: {total}")
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────
+
+
+def _denormalize_boxes(boxes, width: int, height: int) -> list:
+    """Convert SAM3's normalized [0,1] xywh boxes to absolute pixels.
+
+    SAM3 returns ``out_boxes_xywh`` as normalized coordinates; downstream
+    (vis drawing, npz, labels) expects pixel coordinates. Boxes already in
+    pixel space (any value > 1) are passed through unchanged.
+    """
+    out = []
+    for b in boxes:
+        x, y, w, h = (float(v) for v in b)
+        if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0 and w <= 1.0 and h <= 1.0:
+            out.append([x * width, y * height, w * width, h * height])
+        else:
+            out.append([x, y, w, h])
+    return out
+
+
+def _render_label_map(obj_ids, masks, h: int, w: int) -> np.ndarray:
+    """Render a color label-map image (BGR) from per-object masks.
+
+    Background is black; each object id gets a distinct color.
+    """
+    label_map = np.zeros((h, w, 3), dtype=np.uint8)
+    for i, (oid, m) in enumerate(zip(obj_ids, masks)):
+        m_arr = np.asarray(m).astype(bool)
+        if m_arr.shape != (h, w):
+            m_arr = cv2.resize(m_arr.astype(np.uint8), (w, h),
+                               interpolation=cv2.INTER_NEAREST).astype(bool)
+        real_id = int(oid) if oid is not None else i
+        # deterministic color from id
+        color = (
+            (real_id * 47) % 256,
+            (real_id * 97) % 256,
+            (real_id * 173) % 256,
+        )
+        label_map[m_arr] = color
+    return label_map
+
+
+def _write_video(path: Path, frames_bgr: List[np.ndarray], fps: float) -> None:
+    """Write a list of BGR frames to an mp4 file."""
+    if not frames_bgr:
+        return
+    h, w = frames_bgr[0].shape[:2]
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    for fr in frames_bgr:
+        vw.write(fr)
+    vw.release()
 
 
 def main():

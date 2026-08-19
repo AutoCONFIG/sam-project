@@ -1,13 +1,20 @@
 """SAM 3 video inference engine.
 
-Wraps the SAM 3.1 multiplex video predictor into a clean session-based API:
-build model → start_session → add_prompt → propagate → close_session.
+Wraps the SAM 3 video predictor (sam3 or sam3.1) into a clean session-based
+API: build model → start_session → add_prompt → propagate → close_session.
 
-The underlying model uses a global bf16 autocast context (enabled in
-``Sam3MultiplexVideoPredictor.__init__``), so weights stay fp32 and forward
-passes automatically use bf16. Do NOT manually convert weights to bf16 —
-the decoder FFN contains ``autocast(enabled=False)`` which conflicts with
-bf16 weights.
+The underlying model uses a global bf16 autocast context (enabled in the
+predictor ``__init__``), so weights stay fp32 and forward passes automatically
+use bf16. Do NOT manually convert weights to bf16 — the decoder FFN contains
+``autocast(enabled=False)`` which conflicts with bf16 weights.
+
+Both model versions share the same ``handle_request`` / ``handle_stream_request``
+API via the unified ``build_sam3_predictor`` entry point:
+
+- ``version="sam3.1"`` — Object Multiplex, supports ``image_size`` parameterization
+  (16GB GPU can use 672). This is the recommended default.
+- ``version="sam3"``   — base dense tracking, ``image_size`` is fixed at 1008
+  (requires ≥24GB VRAM).
 """
 
 from __future__ import annotations
@@ -30,19 +37,24 @@ from utils.constants import (
     DEFAULT_USE_FA3,
     DEFAULT_USE_ROPE_REAL,
     DEFAULT_COMPILE,
+    DEFAULT_MODEL_VERSION,
 )
 
 
 class Sam3VideoPredictor:
-    """Session-based wrapper around SAM 3.1 multiplex video predictor.
+    """Session-based wrapper around the SAM 3 video predictor.
 
     Parameters
     ----------
     checkpoint : str
-        Path to ``sam3.1_multiplex.pt``.
+        Path to the model checkpoint (``sam3.1_multiplex.pt`` or ``sam3.pt``).
+    version : str
+        Model version — ``"sam3.1"`` (multiplex, recommended) or ``"sam3"``
+        (base dense tracking). Determines which backend builder is used.
     image_size : int
         Inference resolution. Must be a multiple of 336 (14×24) for windowed
         attention. Default 1008 (≥24GB VRAM). Use 672 for 16GB GPUs.
+        NOTE: only ``sam3.1`` honors this; ``sam3`` is fixed at 1008.
     use_fa3 : bool
         Enable Flash Attention 3 (requires flash-attn installed). Default False.
     use_rope_real : bool
@@ -54,15 +66,17 @@ class Sam3VideoPredictor:
     def __init__(
         self,
         checkpoint: str,
+        version: str = DEFAULT_MODEL_VERSION,
         image_size: int = DEFAULT_IMAGE_SIZE,
         use_fa3: bool = DEFAULT_USE_FA3,
         use_rope_real: bool = DEFAULT_USE_ROPE_REAL,
         compile: bool = DEFAULT_COMPILE,
     ):
-        from sam3.model_builder import build_sam3_multiplex_video_predictor
+        from sam3.model_builder import build_sam3_predictor
 
-        self._predictor = build_sam3_multiplex_video_predictor(
+        self._predictor = build_sam3_predictor(
             checkpoint_path=checkpoint,
+            version=version,
             use_fa3=use_fa3,
             use_rope_real=use_rope_real,
             compile=compile,
@@ -146,6 +160,16 @@ class Sam3VideoPredictor:
             "session_id": session_id,
         }):
             yield response["frame_index"], response.get("outputs", {})
+
+    def reset_session(self, session_id: str) -> None:
+        """Reset inference state (clear prompt/tracker) but keep frames loaded.
+
+        Used for multi-class inference: reuse one session across classes so
+        video frames are loaded only once, instead of re-writing temp jpgs and
+        re-loading per class. The backbone feature cache is still recomputed
+        per class (SAM3 clears it on reset), but frame disk I/O is saved.
+        """
+        self._request({"type": "reset_session", "session_id": session_id})
 
     def close_session(self, session_id: str) -> None:
         """Close an inference session and release resources."""

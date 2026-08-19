@@ -1,23 +1,49 @@
 # SAM 3.1 视频推理配置 — 文本提示
 # ===================================
-# 用文本提示在视频中检测、分割并跟踪指定类别的对象
+# 用文本提示在视频中检测、分割并跟踪指定类别的对象。
+# 输出形态跟随输入: 视频进→视频出, 图片目录进→镜像结构图片目录出。
+# 每路输入额外输出 mask 和标签 (COCO + YOLO)。
 
 mode: predict
 
 model:
-  checkpoint: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/sam3/sam3.1/sam3.1_multiplex.pt
-  image_size: 1008              # 推理分辨率, 须为 336 的倍数 (14*24); 16G 显存用 672
-  use_fa3: false                # Flash Attention 3 (需安装 flash-attn, 默认 false)
-  use_rope_real: true           # 实数 RoPE (避免 complex64 buffer, 默认 true)
-  compile: false                # torch.compile (首次慢, 默认 false)
-  frame_index: 0                # 添加提示的帧索引
+  version: sam3.1                   # 模型版本: sam3.1 (推荐) / sam3 (原版, 需≥24GB)
+  checkpoint: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/sam-project/pretrain/sam3.1/sam3.1_multiplex.pt
+  image_size: 672                   # 推理分辨率, 须为 336 的倍数; 16G 显存用 672 (sam3.1 专用)
+  use_fa3: false                    # Flash Attention 3 (需安装 flash-attn)
+  use_rope_real: true               # 实数 RoPE (避免 complex64 buffer)
+  compile: false                    # torch.compile (首次慢)
+  frame_index: 0                    # 添加提示的帧索引
 
 io:
-  input: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/sam3/assets/videos/bedroom.mp4
-  output: runs/predict/test     # 输出目录
-  save_vis: true                # 保存可视化叠加图
-  save_masks: true              # 保存 mask npz (label_map + meta)
-  save_video: false             # 把 vis 合成 mp4
+  input: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/sam-project/sam3/assets/videos/bedroom.mp4
+  output: runs/predict/test         # 输出根目录 (内部按输入结构镜像)
+  save_vis: true                    # 保存可视化 (视频→mp4, 图片→jpg)
+  save_masks: true                  # 保存 mask (视频→mp4, 图片→png) + npz
+  save_video: true                  # 视频输入时合成 mp4
+  save_labels: true                 # 导出标签
+  label_format: [coco, yolo]        # 标签格式: coco / yolo
+
+# ─────────────────────────────────────────────────────────────────────
+# prompt.text 类别写法 (始终用列表):
+#
+#   单类别:
+#     text: ["person"]
+#
+#   多类别:
+#     text:
+#       - person
+#       - bed
+#       - car
+#
+# SAM3 架构不支持一次推理检测多个不同类别 (每次 text prompt 都会 reset
+# session), 所以多类别只能逐类别各跑一遍推理后合并结果。代码已优化:
+# 复用同一个 session (帧只加载一次), 逐类别 reset + 推理, 避免重复写帧/
+# 读帧开销。但 backbone 特征每类别仍需重算 (reset 会清缓存), 这是架构
+# 固有, 无法避免。多类别耗时约为 N 类别 × N 倍单类别时间。
+#
+# 兼容: 字符串 (如 text: "person") 会被自动转单元素列表, 但推荐列表写法。
+# ─────────────────────────────────────────────────────────────────────
 
 prompt:
-  text: "person"                # 文本提示, 如 "person", "a player in white", "dog"
+  text: ["person"]                  # 多类别加列表项 (见上方注释)

@@ -1,0 +1,29 @@
+# SAM 3 视频推理配置 — 文本提示 (原版, 非 multiplex)
+# =====================================================
+# 用 SAM 3 原版权重推理。注意:
+#   - sam3 原版的 image_size 后端固定 1008, 不支持参数化 (需 ≥24GB 显存)
+#   - 16GB 显卡 (如 RTX 5060 Ti) 跑不了此配置, 请用 video_text.yaml (sam3.1 + 672)
+# 输出形态跟随输入, 同 sam3.1 配置。
+
+mode: predict
+
+model:
+  version: sam3                     # sam3 原版 (非 multiplex)
+  checkpoint: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/sam-project/pretrain/sam3/sam3.pt
+  image_size: 1008                  # 固定 1008, 不支持自定义 (需 ≥24GB 显存)
+  use_fa3: false
+  use_rope_real: true
+  compile: false                    # sam3 原版不支持 torch.compile
+  frame_index: 0
+
+io:
+  input: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/sam-project/sam3/assets/videos/bedroom.mp4
+  output: runs/predict/test_sam3
+  save_vis: true
+  save_masks: true
+  save_video: true
+  save_labels: true
+  label_format: [coco, yolo]
+
+prompt:
+  text: "person"

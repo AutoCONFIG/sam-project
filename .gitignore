@@ -8,9 +8,13 @@ __pycache__/
 *.egg-info/
 *.egg
 
-# Model weights (large files, not tracked)
+# Model weights (large files, not tracked — download separately, see HANDOVER.md)
 weights/
+pretrain/
 *.pt
+*.pth
+*.safetensors
+*.bin
 
 # IDE / editor
 .zcode/
