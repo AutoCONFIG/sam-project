@@ -1,0 +1,12 @@
+# SAM 3 模型网络配置 (Roboflow 官方参考配置版)
+# ==============================================
+# 与 sam3_image.yaml 的区别仅在于 hydra_config 指向 Meta 官方的
+# Roboflow 100 全量微调参考配置 (数据集路径在其 paths 段里改,
+# 不支持 configs/datasets/ 注入)。
+
+hydra_config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
+
+pretrained: true        # 预训练权重: true=HF 自动下载 / 路径=指定 ckpt / false=从零训练
+resolution: 1008        # 网络输入分辨率, 336 的倍数
+
+overrides: []

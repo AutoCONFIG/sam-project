@@ -1,0 +1,44 @@
+# SAM 3 自定义数据集微调配置 (模型/数据集/训练/输出 分离配置)
+# 用法: python sam.py configs/train/custom_finetune.yaml
+#
+# 配置分离模式 (参照 yolo-project):
+#   configs/train/xxx.yaml    ← 本文件: 训练入口, 引用模型/数据集配置 + 训练旋钮
+#   configs/models/xxx.yaml   ← 模型网络配置 (pretrained/resolution/网络 overrides)
+#   configs/datasets/xxx.yaml ← 数据集配置 (COCO 格式)
+#   configs/export/xxx.yaml   ← ONNX 导出配置 (mode: export, 独立命令)
+mode: train
+
+model:
+  config: configs/models/sam3_image.yaml   # 模型网络配置 (独立 YAML)
+  # 以下两项可临时覆盖模型配置里的同名项 (一般直接改模型配置):
+  # pretrained: /path/to/sam3.pt
+  # resolution: 672
+
+data:
+  config: configs/datasets/roboflow_vl_100.yaml   # 数据集配置 (独立 YAML)
+
+train:
+  # ── 资源 ──
+  use_cluster: 0        # 0=本地, 1=SLURM 集群
+  num_gpus: 4           # 每节点 GPU 数 (单机 4/8 卡 4090 按实际改)
+  num_nodes: 1
+  # device: "0,1,2,3"   # 指定用哪几张卡 (CUDA_VISIBLE_DEVICES); 不设则用全部可见卡
+
+  # ── 训练旋钮 (均映射到后端确认存在的 Hydra 键) ──
+  batch: 1              # 每卡 batch → scratch.train_batch_size (4090 可试 2-4)
+  epochs: 20            # 训练轮数 → trainer.max_epochs
+  # lr_scale: 0.1       # 学习率缩放 (各组 lr = base × lr_scale) → scratch.lr_scale
+  # weight_decay: 0.1   # 权重衰减 → scratch.wd
+  # grad_accum: 1       # 梯度累积步数 → scratch.gradient_accumulation_steps
+  # val_freq: 10        # 每隔几轮验证 → trainer.val_epoch_freq
+  # workers: 10         # dataloader 进程数 → scratch.num_train_workers (Windows 建议 0)
+  # save_freq: 0        # checkpoint 保存频率 (0=只存最后一个) → trainer.checkpoint.save_freq
+  # seed: 123           # 随机种子 → trainer.seed_value
+  # amp: true           # bf16 混合精度 → trainer.optim.amp.enabled
+
+  # ── 任意 Hydra 覆盖 (原样透传; 同键时靠后的生效, 优先级最高) ──
+  overrides: []
+  #   - scratch.enable_segmentation=true  # 开分割训练 (还需模板里 3 处联动, 见模板注释)
+
+output:
+  path: runs/train/custom_ft    # 实验输出目录 (checkpoints/tensorboard/logs)

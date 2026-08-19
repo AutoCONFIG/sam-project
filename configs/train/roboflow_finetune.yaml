@@ -1,24 +1,34 @@
 # SAM 3 训练配置示例 (转发到 sam3 子模块的 Hydra 训练系统)
 # 用法: python sam.py configs/train/roboflow_finetune.yaml
+#
+# 配置分三个独立 YAML (参照 yolo-project 的分离模式):
+#   configs/train/xxx.yaml    ← 本文件: 模型/数据引用/训练旋钮/输出
+#   configs/datasets/xxx.yaml ← 数据集根目录 + COCO 目录布局 (下方 data.config 引用)
+#   configs/export/xxx.yaml   ← ONNX 导出 (mode: export, 独立命令)
 mode: train
-train:
-  # 训练配置路径, 前端视角 (相对于项目根或绝对路径):
-  #   子模块参考配置: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
-  #   前端自定义配置: 放在 configs/train/hydra/ 下, 如 configs/train/hydra/my_ft.yaml
-  #                  (启动时自动同步进子模块 sam3/sam3/train/configs/_custom/)
-  config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
 
+model:
+  # 模型网络配置 (独立 YAML, 其中 hydra_config 指向子模块内的官方参考配置)
+  config: configs/models/sam3_roboflow_ref.yaml
+
+  # pretrained: /path/to/sam3.pt  # 预训练权重路径; true=HF 自动下载(默认); false=从零训练
+  # resolution: 1008              # 训练分辨率, 336 的倍数 (→ scratch.resolution + trainer.model.image_size 同步改)
+
+data:
+  # 独立数据集配置 (COCO 格式); 仅配合前端模板 custom_image_ft.yaml 使用,
+  # 本例直接用后端 roboflow 参考配置时, 数据集路径在该配置的 paths 段里改
+  # config: configs/datasets/roboflow_vl_100.yaml
+
+train:
   # ── 资源 ──
   use_cluster: 0    # 0=本地, 1=SLURM 集群 (后端参考配置默认 1, 本地必须显式设 0)
   num_gpus: 4       # 每节点 GPU 数, 按机器调整
   num_nodes: 1      # 节点数
-  # gpu_ids: [0, 1, 2, 3]   # 指定用哪几张卡 (CUDA_VISIBLE_DEVICES); 不设则用全部可见卡
+  # device: "0,1,2,3"   # 指定用哪几张卡 (CUDA_VISIBLE_DEVICES); 不设则用全部可见卡
 
   # ── 常用训练参数 (前端翻译为 Hydra override) ──
-  # pretrained: /path/to/sam3.pt  # 预训练权重路径; true=HF 自动下载(默认); false=从零训练
-  # batch_size: 1                 # 每卡 batch (→ scratch.train_batch_size)
-  # max_epochs: 20                # 训练轮数 (→ trainer.max_epochs)
-  # resolution: 1008              # 训练分辨率, 336 的倍数 (→ scratch.resolution + trainer.model.image_size 同步改)
+  # batch: 1                    # 每卡 batch (→ scratch.train_batch_size)
+  # epochs: 20                  # 训练轮数 (→ trainer.max_epochs)
 
   # ── 任意 Hydra 覆盖 (原样透传; 同键时靠后的生效) ──
   # overrides:
@@ -26,3 +36,8 @@ train:
   #   - trainer.val_epoch_freq=5        # 每隔几轮验证一次
   #   - scratch.num_train_workers=4     # dataloader 进程数
   #   - trainer.skip_saving_ckpts=false # 保存 checkpoint (参考配置默认 true 不存!)
+
+output:
+  # 实验输出目录 (checkpoints/tensorboard/logs), 相对项目根或绝对路径;
+  # 不设则用 Hydra 配置里的 paths.experiment_log_dir
+  # path: runs/train/roboflow_ft

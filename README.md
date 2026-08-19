@@ -11,7 +11,7 @@ sam-project/
 ├── commands/             # predict.py, train.py
 ├── core/                 # engine.py (SAM3 predictor wrapper), visualization.py
 ├── utils/                # config.py, constants.py
-├── configs/              # YAML configs for predict/train
+├── configs/              # YAML configs: predict/ train/ models/ datasets/
 ├── sam3/                 # git submodule (SAM3 backend, fork: AutoCONFIG/sam3)
 └── runs/                 # Output directory (gitignored)
 ```
