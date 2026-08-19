@@ -7,3 +7,9 @@
 pyyaml>=6.0
 opencv-python>=4.8
 numpy>=1.26
+
+# ONNX 导出 (mode: export) 按需安装:
+#   onnx>=1.16                # 必需 (torch.onnx.export 保存/校验)
+#   onnxruntime>=1.17         # verify.enabled=true 时数值验证
+#   onnxsim>=0.4              # export.simplify=true 时图简化
+#   onnxconverter-common>=1.14# export.fp16=true 时 fp16 转换

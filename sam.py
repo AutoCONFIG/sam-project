@@ -18,6 +18,7 @@ from pathlib import Path
 MODES = {
     "predict": "commands.predict",
     "train": "commands.train",
+    "export": "commands.export",
 }
 
 

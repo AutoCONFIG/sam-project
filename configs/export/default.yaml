@@ -1,0 +1,46 @@
+# SAM 3 ONNX 导出配置
+# ===================================
+# 把 SAM 3.1 multiplex 模型拆成独立子模型分别导出为 ONNX (拆分方案见
+# docs/ONNX_EXPORT_PLAN.md)。所有子模型来自同一个模型构建
+# (build_sam3_multiplex_video_predictor, 与 predict 推理同一条链路)。
+#
+# 注意:
+# - 导出需要 CUDA GPU (模型构建链与位置编码预计算硬依赖 cuda)
+# - 文本编码器导出的输入是 BPE token ids, tokenizer 不导出
+#   (端侧用 Python/JS 实现相同 tokenization)
+#
+# 用法: python sam.py configs/export/default.yaml
+
+mode: export
+
+model:
+  # 模型权重: 本地 sam3.1 multiplex ckpt (.pt, 含 detector./tracker. 前缀键);
+  # null = 从 HuggingFace 自动下载原版 facebook/sam3.1 权重 (gated repo, 需 token)
+  path: null
+  # 微调权重: 训练链产出的 image model 裸 state_dict (runs/train/.../checkpoints/
+  # checkpoint.pt), 构建后加载进 detector —— 导出自定义微调模型时指到这里,
+  # 训练 resolution 需与下面 resolution 一致; 空=不加载
+  finetune_ckpt:
+  resolution: 1008        # 导出固定分辨率, 须为 336 的倍数; 16G 显存建议 672
+
+export:
+  # 要导出的子模型, 可选值:
+  #   image_encoder   (A: ViT + Sam3TriViTDetNeck, 3头×3级 FPN 特征 + 位置编码)
+  #   text_encoder    (B: TextTransformer + resizer, token_ids → 文本特征)
+  #   prompt_encoder  (C: SAM 风格 PromptEncoder, 交互式点提示 → sparse/dense 嵌入)
+  #   memory_attn     (D: TransformerEncoderDecoupledCrossAttention, 记忆注意力)
+  #   mask_decoder    (E: MultiplexMaskDecoder, 传播路径掩码解码)
+  #   memory_encoder  (F: SimpleMaskEncoder, 记忆编码)
+  # 或写 all 导出全部 6 个
+  components: [image_encoder, text_encoder]
+  opset: 17               # ONNX opset (RKNN Toolkit2 上限 19)
+  dynamic: false          # 动态 batch 轴 (RKNN 偏好静态; x86/ARM ONNX Runtime 可开)
+  simplify: true          # 导出后用 onnxsim 简化 (需 pip install onnxsim)
+  fp16: false             # 导出后转 fp16 (需 pip install onnxconverter-common)
+
+output:
+  dir: runs/export/default  # 输出目录, 每个组件一个 <component>.onnx
+
+verify:
+  enabled: true           # 导出后用 onnxruntime 对比 PyTorch 输出 (需 pip install onnxruntime)
+  tolerance: 1.0e-5       # FP32 容差; fp16 时自动放宽到 1.0e-2
