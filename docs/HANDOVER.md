@@ -118,7 +118,7 @@ sam-project/
 - ✅ 前端训练配置分区为 `model`（标量多态：权重 `.pt`=预训练微调（默认模型配置 `configs/models/sam3_image.yaml`）/ 模型配置 `.yaml`=从头训练 / `hf` 或缺省=HF 下载微调）+ 顶层 `resolution` / `data`（`config` 引用独立数据集 YAML）/ `train`（资源与旋钮）/ `output`（`path` → `paths.experiment_log_dir`）；顶层 `hydra_config` 为指向子模块现成配置的逃生舱，示例 `configs/train/custom_finetune.yaml`
 - ✅ 数据集配置独立成 `configs/datasets/*.yaml`（path/train/val/ann_file/num_images），前端翻译为 `paths.dataset_root` + `trainer.data.{train,val}.dataset.{img_folder,ann_file}` + 验证 GT 路径等 override；依赖模板标准键，配合 `configs/models/sam3_image.yaml` 使用（其 hydra 段含这些键）
 - ✅ `paths.bpe_path` 自动注入子模块内绝对路径，无需手配
-- ✅ 训练旋钮全量前端直配（23 个，均映射到后端配置里逐一核实存在的键，默认值与后端一致，删掉/留空即不改）：batch/epochs/lr_scale/weight_decay/lrd/scheduler_timescale/scheduler_warmup/scheduler_cooldown/grad_accum/grad_clip/amp/amp_dtype/val_freq/skip_first_val/val_batch/workers/val_workers/max_ann_per_img/save_freq/log_freq/seed/timeout_hour/cpus_per_task（映射表 `commands/train.py: TRAIN_KEY_MAP`）；长尾键走 `train.overrides` 透传
+- ✅ 训练旋钮全量前端直配（24 个，均映射到后端配置里逐一核实存在的键，默认值与后端一致，删掉/留空即不改）：batch/epochs/lr_scale/weight_decay/lrd/scheduler_timescale/scheduler_warmup/scheduler_cooldown/grad_accum/grad_clip/amp/amp_dtype/val_freq/skip_first_val/val_batch/workers/val_workers/max_ann_per_img/save_freq/log_freq/skip_saving_ckpts/seed/timeout_hour/cpus_per_task（映射表 `commands/train.py: TRAIN_KEY_MAP`）；长尾参数直接编辑模型配置的 hydra 段
 - ✅ subprocess 透传 `PYTHONPATH=<sam3 子模块>`，未 `pip install -e sam3` 也能 import
 - ✅ `build_sam3_image_model(image_size=...)` 训练链路分辨率参数化（须为 336 倍数）
 
@@ -128,7 +128,7 @@ sam-project/
 - 预训练权重：后端 `build_sam3_image_model(checkpoint_path=None, load_from_HF=True)`——`checkpoint_path` 优先，为 None 且 `load_from_HF=True` 时从 HF 下载 sam3 原版（gated repo 需 token），两者都空 = 从头训练；前端 `model` 字段：指 `.pt` → 注入 `++trainer.model.checkpoint_path`，指模型配置 yaml → 注入 `++trainer.model.load_from_HF=false`，`hf`/缺省 → 不注入
 - 数据格式为 COCO（img_folder + `_annotations.coco.json`），文本 prompt = `categories[].name`；只支持图片级训练（video dataset 类存在但无训练配置）
 - odinw 配置里的 `freeze_*` / `use_act_checkpoint_*` 键无代码消费，是死配置——开箱只支持全量微调
-- 任意 Hydra 覆盖可通过前端 `train.overrides` 列表透传（后端 `train.py` 已改 `parse_known_args` + `compose(overrides=)`）；键在参考配置里不存在的用 `++` 前缀（前端翻译常用参数时已自动处理）
+- 前端注入的所有 Hydra 覆盖（旋钮/数据集/权重路径等）都作为尾随参数传给后端 `train.py`（fork 已改 `parse_known_args` 收集 + `compose(overrides=)`）；键在参考配置里不存在的用 `++` 前缀（前端已自动处理）；用户侧长尾参数直接编辑模型配置 hydra 段，不提供透传字段
 
 **缺失项：**
 - ❌ **没有实际跑通过训练**：只是 subprocess 转发，未验证端到端

@@ -63,9 +63,7 @@ train:
   # ── 记录 / 保存 ──
   save_freq: 0          # checkpoint 保存频率, 0=只存最后一个 → trainer.checkpoint.save_freq
   log_freq: 10          # 日志打印频率 (step) → trainer.logging.log_freq
-
-  # ── 任意 Hydra 覆盖 (原样透传, 上面没列的长尾键都走这里; 同键时优先级最高) ──
-  overrides: []
+  skip_saving_ckpts: false  # 是否不存 checkpoint → trainer.skip_saving_ckpts (微调必须 false)
 
 output:
   path: runs/train/custom_ft    # 实验输出目录 (checkpoints/tensorboard/logs) → paths.experiment_log_dir

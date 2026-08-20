@@ -59,12 +59,7 @@ train:
   # ── 记录 / 保存 ──
   save_freq: 0          # → trainer.checkpoint.save_freq (0=只存最后一个)
   log_freq: 10          # → trainer.logging.log_freq
-
-  # ── 任意 Hydra 覆盖 (原样透传; 同键时优先级最高) ──
-  # 官方参考配置 trainer.skip_saving_ckpts 默认 true 不存 checkpoint,
-  # 要存权重必须保留下面这条 (configs/models/sam3_image.yaml 的 hydra 段已默认 false)
-  overrides:
-    - trainer.skip_saving_ckpts=false
+  skip_saving_ckpts: false  # → trainer.skip_saving_ckpts (官方参考配置默认 true 不存 checkpoint, 必须显式 false)
 
 output:
   path: runs/train/roboflow_ft    # 实验输出目录 → paths.experiment_log_dir

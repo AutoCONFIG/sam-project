@@ -11,9 +11,8 @@
 # sam3.train 包内, 这步自动生成, 勿手改)。
 #
 # 数据路径/权重/batch/分辨率/GPU/输出目录等常用项都在训练配置里, 由前端翻译为
-# override 注入; 要改网络/loss/优化器等高级项时直接编辑 hydra: 段,
-# 临时覆盖用训练配置的 train.overrides (如 trainer.model.enable_segmentation=true
-# 开分割分支, 还需 hydra 段里 3 处联动, 见下文注释)。
+# override 注入; 要改网络/loss/优化器等高级项时直接编辑 hydra: 段
+# (如 scratch.enable_segmentation: true 开分割分支, 还需段内 4 处联动, 见下文注释)。
 
 # ── 完整 Hydra 训练配置 (原样平铺; 生成时自动补 # @package _global_ 头) ──
 hydra:

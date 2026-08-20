@@ -67,15 +67,14 @@
 #   # 记录 / 保存
 #   save_freq: 0            # → trainer.checkpoint.save_freq (0=只存最后一个)
 #   log_freq: 10            # → trainer.logging.log_freq
-#   # 任意 Hydra 覆盖 (原样透传, 同键靠后生效, 优先级最高) —— 未列长尾键都走这里
-#   overrides:
-#     - scratch.enable_segmentation=true   # 开分割训练 (还需模板里 3 处联动, 见模板注释)
+#   skip_saving_ckpts: false  # → trainer.skip_saving_ckpts (微调必须 false)
 # output:
 #   path: runs/train/custom_ft    # 实验输出目录 → paths.experiment_log_dir
 #
 # 说明:
 #   - 上面 train.* 的每个旋钮都映射到后端配置里确认存在的键 (已对照官方 roboflow
-#     参考配置与 sam3_image.yaml 的 hydra 段逐一核实), 未列出的长尾参数用 overrides 透传
+#     参考配置与 sam3_image.yaml 的 hydra 段逐一核实); 未列出的长尾参数直接编辑
+#     模型配置的 hydra 段 (那里是完整平铺的全部训练配置)
 #   - paths.bpe_path 由前端自动注入为子模块内绝对路径, 不用配
 #   - data.config 的数据集注入依赖标准 Hydra 键 (paths.dataset_root /
 #     trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合
@@ -90,13 +89,12 @@
 #   python sam.py configs/train/<your_config>.yaml --num-gpus 8 --batch-size 2
 #   python sam.py configs/train/<your_config>.yaml --data configs/datasets/xxx.yaml
 #   python sam.py configs/train/<your_config>.yaml --sam3-config sam3/sam3/train/configs/my_ft.yaml
-#   python sam.py configs/train/<your_config>.yaml --override scratch.lr_scale=0.05
 #   python sam.py configs/train/<your_config>.yaml --use-cluster 1 --partition <name>
 #
 # 重要提醒 (后端参考配置的默认值是 Meta 为集群评测设计的, 直接用会踩坑):
 #   1. 参考配置 submitit.use_cluster 默认 True —— 本地训练必须在前端 YAML 显式 use_cluster: 0
-#   2. 参考配置 trainer.skip_saving_ckpts 默认 true —— 微调前务必用 overrides 改成 false, 否则不存 checkpoint
-#      (configs/models/sam3_image.yaml 的 hydra 段已设为 false)
+#   2. 参考配置 trainer.skip_saving_ckpts 默认 true —— 微调前务必显式 skip_saving_ckpts: false,
+#      否则不存 checkpoint (configs/models/sam3_image.yaml 的 hydra 段已设为 false)
 #   3. model 不写或写 hf 则默认 load_from_HF=True, 自动从 HuggingFace 下载 sam3 原版权重
 #      (gated repo 需 token), 建议显式指向本地 .pt
 #   4. 数据格式: COCO (img_folder + _annotations.coco.json), 类别 name 即文本 prompt

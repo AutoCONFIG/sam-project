@@ -36,10 +36,10 @@ network architecture, so a weights file alone is enough):
 Top-level ``hydra_config`` (or CLI ``--sam3-config``) is an escape hatch
 pointing at a ready-made config inside the submodule (e.g. the official
 roboflow reference config). ``resolution`` and ``train.*`` knobs are
-translated into Hydra overrides, and ``train.overrides`` passes any raw Hydra
-override through verbatim (the backend ``train.py`` forwards them to
-``hydra.compose``). ``paths.bpe_path`` is always injected as an absolute path
-into the submodule's assets.
+translated into Hydra overrides and passed as trailing args (the backend
+``train.py`` forwards them to ``hydra.compose``); long-tail parameters are
+edited directly in the model config's ``hydra:`` section. ``paths.bpe_path``
+is always injected as an absolute path into the submodule's assets.
 
 Usage::
 
@@ -56,7 +56,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from utils.config import (
-    get_nested_value,
     load_yaml_config,
     setup_sam3_path,
 )
@@ -105,6 +104,7 @@ TRAIN_KEY_MAP = {
     "max_ann_per_img": "scratch.max_ann_per_img",   # 单图最多标注数 (超出过滤)
     "save_freq": "trainer.checkpoint.save_freq",    # 0=只存最后一个
     "log_freq": "trainer.logging.log_freq",
+    "skip_saving_ckpts": "trainer.skip_saving_ckpts",  # 微调必须 false
     "seed": "trainer.seed_value",
     "timeout_hour": "submitit.timeout_hour",        # 仅集群
     "cpus_per_task": "submitit.cpus_per_task",      # 仅集群
@@ -124,7 +124,6 @@ Examples:
     python -m commands.train --config configs/train/custom_finetune.yaml --num-gpus 2
     python sam.py configs/train/custom_finetune.yaml --model pretrain/sam3/sam3.pt
     python sam.py configs/train/custom_finetune.yaml --batch-size 2 --resolution 672
-    python sam.py configs/train/custom_finetune.yaml --override scratch.lr_scale=0.05
 
 model 字段 (标量): 权重 .pt = 预训练微调 (默认模型配置 configs/models/sam3_image.yaml)
 / 模型配置 .yaml = 从头训练 / hf 或缺省 = HF 下载官方权重微调; 顶层 hydra_config
@@ -159,8 +158,6 @@ model 字段 (标量): 权重 .pt = 预训练微调 (默认模型配置 configs/
                         help="训练分辨率, 须为 336 的倍数 (同步改 scratch.resolution 与 trainer.model.image_size)")
     parser.add_argument("--gpu-ids", type=str, default=None,
                         help="使用哪些 GPU, 如 '1,2,3' (CUDA_VISIBLE_DEVICES; 未给 num-gpus 时按数量自动设置)")
-    parser.add_argument("--override", type=str, default=None, action="append",
-                        help="透传任意 Hydra 覆盖, 可多次使用, 如 --override scratch.lr_scale=0.05")
 
     return parser.parse_args()
 
@@ -327,9 +324,6 @@ def build_hydra_overrides(knobs: Dict[str, Any]) -> List[str]:
             value = str(value).lower()
         overrides.append(f"{hydra_key}={value}")
 
-    # 任意 Hydra 覆盖, 原样透传
-    overrides.extend(str(o) for o in knobs.get("overrides") or [])
-
     return _dedupe_overrides(overrides)
 
 
@@ -398,7 +392,7 @@ def train(config: Dict) -> None:
         )
 
     # ── Hydra overrides: 基础设施 (bpe/output/数据集) → 预训练权重 (model 字段)
-    #    → resolution/训练旋钮 → 用户透传 ──
+    #    → resolution/训练旋钮 ──
     hydra_overrides: List[str] = [
         # bpe_path 在参考配置里是 <BPE_PATH> 占位符, 统一注入绝对路径
         f'paths.bpe_path="{BPE_PATH.as_posix()}"',
@@ -426,7 +420,6 @@ def train(config: Dict) -> None:
 
     hydra_overrides += build_hydra_overrides({
         "resolution": resolution,
-        "overrides": train_cfg.get("overrides"),
         **{k: train_cfg.get(k) for k in TRAIN_KEY_MAP},
     })
     hydra_overrides = _dedupe_overrides(hydra_overrides)
@@ -518,10 +511,6 @@ def main():
             train_cli["epochs"] = args.max_epochs
         if args.gpu_ids is not None:
             train_cli["device"] = [int(x) for x in args.gpu_ids.split(",") if x.strip()]
-        if args.override:
-            # 与 YAML 的 overrides 合并 (CLI 在后, 同键时 CLI 生效)
-            yaml_overrides = get_nested_value(config, "train", "overrides") or []
-            train_cli["overrides"] = [*yaml_overrides, *args.override]
 
         # 注意: YAML 里只有注释的分区会被解析成 None, setdefault 不会覆盖 None
         for section, cli in (("train", train_cli), ("data", data_cli),
