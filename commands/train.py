@@ -13,18 +13,17 @@ Frontend config is split into independent YAMLs (see configs/):
 
 - ``configs/train/xxx.yaml``    — train entry: references model/data configs,
   training knobs (train.*) and output dir (output.path)
-- ``configs/models/xxx.yaml``   — model network config: which Hydra config
-  (``hydra_config``, inside the sam3 submodule), ``pretrained``,
-  ``resolution``, and network-related ``overrides``
+- ``configs/models/xxx.yaml``   — model network config: the complete training
+  config flattened into its ``hydra:`` section (materialized into
+  ``sam3/sam3/train/configs/_custom/`` at launch — Hydra requires configs to
+  live inside the ``sam3.train`` module), plus ``pretrained``, ``resolution``
+  and network-related ``overrides``. ``hydra_config`` is an escape hatch
+  pointing at a ready-made config inside the submodule (e.g. the official
+  roboflow reference config)
 - ``configs/datasets/xxx.yaml`` — dataset root + COCO split layout,
   translated into Hydra overrides (``paths.dataset_root``,
   ``trainer.data.*.dataset.img_folder/ann_file``)
 - ``configs/export/xxx.yaml``   — ONNX export (mode: export, separate command)
-
-The Hydra config must live inside the sam3 submodule
-(``sam3/sam3/train/configs/``) — Hydra requires configs to live inside the
-``sam3.train`` module. The ready-made template for custom COCO datasets is
-``sam3/sam3/train/configs/custom_image_ft.yaml``.
 
 Common knobs (``model.pretrained`` / ``model.resolution`` / ``train.batch`` /
 ``train.epochs`` / ``train.device``) are translated into Hydra overrides, and
@@ -64,15 +63,14 @@ HYDRA_CONFIG_ROOT = SAM3_ROOT / "sam3" / "train"
 BPE_PATH = SAM3_ROOT / "sam3" / "assets" / "bpe_simple_vocab_16e6.txt.gz"
 
 # 数据集 YAML 注入依赖 Hydra 配置里的标准键 (paths.dataset_root /
-# trainer.data.{train,val}.dataset.*), 即模板 sam3/sam3/train/configs/
-# custom_image_ft.yaml 的结构; 后端自带配置 (roboflow_v100 等) 路径键名不同,
-# 不支持数据集 YAML 注入
+# trainer.data.{train,val}.dataset.*), 即模型配置 sam3_image.yaml hydra 段的
+# 结构; 后端自带配置 (roboflow_v100 等) 路径键名不同, 不支持数据集 YAML 注入
 _DEFAULT_TRAIN_SUBDIR = "train"
 _DEFAULT_VAL_SUBDIR = "valid"
 _DEFAULT_ANN_FILE = "_annotations.coco.json"
 
 # 训练旋钮 → Hydra 键映射: 键均已对照官方 roboflow 参考配置与
-# sam3/sam3/train/configs/custom_image_ft.yaml 逐一核实存在且语义一致
+# configs/models/sam3_image.yaml 的 hydra 段逐一核实存在且语义一致
 TRAIN_KEY_MAP = {
     "batch": "scratch.train_batch_size",
     "epochs": "trainer.max_epochs",
@@ -114,16 +112,16 @@ Examples:
     python sam.py configs/train/roboflow_finetune.yaml --batch-size 2 --resolution 672
     python sam.py configs/train/roboflow_finetune.yaml --override scratch.lr_scale=0.05
 
-model.config 指向模型网络配置 (configs/models/xxx.yaml), 其中的 hydra_config
-才是 Hydra 训练配置 (子模块内), 如:
-    sam3/sam3/train/configs/custom_image_ft.yaml   (自定义数据集微调模板, 推荐)
+model.config 指向模型网络配置 (configs/models/xxx.yaml); 其中 hydra: 段是完整
+平铺的训练配置 (启动时生成进子模块 configs/_custom/), 或用 hydra_config 字段
+直接指向子模块内现成配置, 如官方参考配置:
     sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
         """,
     )
 
     parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
     parser.add_argument("--sam3-config", type=str, default=None,
-                        help="Hydra 训练配置路径 (前端相对/绝对路径, 如 sam3/sam3/train/configs/custom_image_ft.yaml)")
+                        help="直接指定子模块内的 Hydra 训练配置 (绕过模型配置的 hydra 段)")
     parser.add_argument("--data", type=str, default=None,
                         help="数据集配置路径 (如 configs/datasets/xxx.yaml)")
     parser.add_argument("--use-cluster", type=int, default=None, choices=[0, 1],
@@ -161,7 +159,6 @@ def resolve_hydra_config(config_value: str) -> str:
 
     ``config_value`` 为项目根相对路径或绝对路径, 必须指向子模块内的配置
     (Hydra initialize_config_module 要求配置必须在 sam3.train 模块内), 如
-    ``sam3/sam3/train/configs/custom_image_ft.yaml`` 或
     ``sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml``。
     """
     path = _resolve_frontend_path(config_value, must_exist=False)
@@ -177,8 +174,7 @@ def resolve_hydra_config(config_value: str) -> str:
         raise ValueError(
             f"Hydra 训练配置必须位于 sam3 子模块内 (sam3/sam3/train/configs/):\n"
             f"  {path}\n"
-            f"前端自定义配置请复制模板 sam3/sam3/train/configs/custom_image_ft.yaml "
-            f"到该目录下修改 (改动属于 sam3 fork 仓库)"
+            f"自定义训练请用 configs/models/ 模型配置的 hydra: 段 (平铺完整配置)"
         )
 
 
@@ -191,6 +187,45 @@ def _resolve_frontend_path(value: str, must_exist: bool = False) -> Path:
     if must_exist and not path.exists():
         raise FileNotFoundError(f"路径不存在: {value} (解析为 {path})")
     return path
+
+
+def materialize_hydra_config(net_path: Path, net_cfg: Dict[str, Any]) -> str:
+    """把模型配置 (configs/models/xxx.yaml) 的 ``hydra:`` 段原样落到子模块
+    ``sam3/sam3/train/configs/_custom/<模型配置文件名>.yaml``, 返回 Hydra config 名。
+
+    Hydra initialize_config_module 要求配置必须在 sam3.train 模块内, 所以平铺在
+    前端模型配置里的完整训练配置要生成进子模块才能被后端加载。按文本原样搬运
+    (不经 YAML 序列化往返), ``${...}`` 插值与注释完全保真; 内容不变时不重写,
+    避免无意义的 mtime 变化。
+    """
+    if not isinstance(net_cfg.get("hydra"), dict):
+        raise ValueError(
+            f"模型配置缺少 hydra 段 (完整 Hydra 训练配置的平铺内容): {net_path}"
+        )
+    lines = net_path.read_text(encoding="utf-8").splitlines()
+    start = next((i for i, line in enumerate(lines) if line == "hydra:"), None)
+    if start is None:
+        raise ValueError(f"模型配置里找不到顶层 hydra: 段: {net_path}")
+
+    body: List[str] = []
+    for line in lines[start + 1:]:
+        if not line.strip():
+            body.append("")
+        elif line.startswith("  "):
+            body.append(line[2:])
+        elif line.startswith("#"):
+            body.append(line)   # 未缩进的注释行也保留
+        else:
+            break               # 回到顶层键 → hydra 段结束
+    text = "# @package _global_\n" + "\n".join(body).strip("\n") + "\n"
+
+    custom_dir = HYDRA_CONFIG_ROOT / "configs" / "_custom"
+    custom_dir.mkdir(parents=True, exist_ok=True)
+    dst = custom_dir / (net_path.stem + ".yaml")
+    if not dst.exists() or dst.read_text(encoding="utf-8") != text:
+        dst.write_text(text, encoding="utf-8")
+        print(f"已由模型配置生成 Hydra 配置: {dst}")
+    return f"configs/_custom/{dst.name}"
 
 
 # ─── Hydra override translation ─────────────────────────────────────────────
@@ -217,8 +252,8 @@ def _normalize_gpu_ids(value: Any) -> Optional[List[int]]:
 def build_dataset_overrides(data_config_value: str) -> List[str]:
     """把独立的数据集 YAML (configs/datasets/xxx.yaml) 翻译为 Hydra overrides。
 
-    覆盖的都是标准键 (微调模板 custom_image_ft.yaml 与后端 roboflow 参考配置
-    共有的 Sam3ImageDataset 键), 用 ``=``; paths.dataset_root 只有微调模板有。
+    覆盖的都是标准键 (模型配置 sam3_image.yaml hydra 段与后端 roboflow 参考配置
+    共有的 Sam3ImageDataset 键), 用 ``=``; paths.dataset_root 只有 hydra 段有。
     """
     ds_path = _resolve_frontend_path(data_config_value, must_exist=True)
     ds = load_yaml_config(str(ds_path)) or {}
@@ -318,11 +353,18 @@ def train(config: Dict) -> None:
     net_path = _resolve_frontend_path(str(model_ref), must_exist=True)
     net_cfg = load_yaml_config(str(net_path)) or {}
 
-    sam3_config = model_cfg.get("hydra_config") or net_cfg.get("hydra_config")
-    if not sam3_config:
+    # Hydra 配置来源: hydra_config 字段 (指向子模块内现成配置, 如官方 roboflow
+    # 参考配置) 或模型配置里平铺的 hydra: 段 (启动时生成进子模块 _custom/)
+    hydra_ref = model_cfg.get("hydra_config") or net_cfg.get("hydra_config")
+    if hydra_ref:
+        sam3_config = resolve_hydra_config(str(hydra_ref))
+    elif isinstance(net_cfg.get("hydra"), dict):
+        sam3_config = materialize_hydra_config(net_path, net_cfg)
+    else:
         raise ValueError(
-            f"模型配置缺少 hydra_config 字段: {net_path}\n"
-            f"(Hydra 训练配置路径, 如 sam3/sam3/train/configs/custom_image_ft.yaml)"
+            f"模型配置 {net_path} 需要以下二者之一:\n"
+            f"  hydra: 段 (完整 Hydra 训练配置的平铺内容, 推荐)\n"
+            f"  hydra_config: 字段 (指向子模块内现成配置, 如官方参考配置)"
         )
     # 训练 YAML 的 model.pretrained/resolution 可覆盖模型配置里的同名项
     # (不能用 dict.get 的默认值或 or: 空字段是 None 需要回落, 而 pretrained=false 是合法值)
@@ -350,8 +392,6 @@ def train(config: Dict) -> None:
             f"SAM3 训练脚本不存在: {train_script}\n"
             "请确保 sam3 子模块已正确初始化 (git submodule update --init)"
         )
-
-    sam3_config = resolve_hydra_config(sam3_config)
 
     # ── Hydra overrides: 基础设施 (bpe/output/数据集) → 模型网络配置
     #    (pretrained/resolution/网络 overrides) → 训练旋钮 → 用户透传 ──

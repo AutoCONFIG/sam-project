@@ -11,9 +11,9 @@
 # COCO categories[].name 即文本 prompt (开放词表检测的训练信号)。
 #
 # 注意: 数据集注入依赖 Hydra 配置里的标准键 (paths.dataset_root /
-# trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合前端模板
-# sam3/sam3/train/configs/custom_image_ft.yaml 使用; 直接用后端自带配置
-# (如 roboflow_v100) 时, 数据路径在那些配置自己的 paths 段里改。
+# trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合模型配置
+# configs/models/sam3_image.yaml 使用 (其 hydra: 段含这些键); 直接用后端
+# 自带配置 (如 roboflow_v100) 时, 数据路径在那些配置自己的 paths 段里改。
 
 path: <YOUR_DATASET_ROOT>        # 数据集根目录 (绝对路径, 或相对项目根)
 

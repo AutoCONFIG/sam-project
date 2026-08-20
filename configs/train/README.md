@@ -10,16 +10,15 @@
 # 训练涉及两层配置:
 #   1. 前端训练配置 (本目录): model / data / train / output 四个分区
 #   2. Hydra 训练配置: 完整的训练参数 (模型结构/transforms/优化器/loss),
-#      由模型配置 (configs/models/) 里的 hydra_config 字段指向, 必须位于
-#      sam3 子模块内 (Hydra initialize_config_module 要求配置必须在
-#      sam3.train 包内, 见 sam3/sam3/train/train.py):
-#       - 自定义数据微调模板 (推荐):
-#           sam3/sam3/train/configs/custom_image_ft.yaml
-#           本 fork 提供的完整模板 (COCO 图片微调), 复制改名后按需修改
-#           (改动属于 sam3 fork 仓库)
-#       - 子模块自带参考配置:
-#           sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml  — Roboflow 100 全量微调
-#           sam3/sam3/train/configs/odinw13/odinw_text_only_train.yaml                  — ODinW-13 文本训练
+#      完整平铺在模型配置 (configs/models/sam3_image.yaml) 的 hydra: 段里,
+#      启动训练时前端原样生成到子模块 sam3/sam3/train/configs/_custom/
+#      <文件名>.yaml 再传给后端 (Hydra initialize_config_module 要求配置
+#      必须在 sam3.train 包内, 见 sam3/sam3/train/train.py; 生成文件勿手改)
+#
+# 例外: 要直接复用子模块内的现成配置时, 模型配置不写 hydra: 段, 改用
+# hydra_config 字段指向它 (见 configs/models/sam3_roboflow_ref.yaml):
+#   sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml  — Roboflow 100 全量微调
+#   sam3/sam3/train/configs/odinw13/odinw_text_only_train.yaml                  — ODinW-13 文本训练
 #
 # 前端训练配置示例 (分区字段均按 sam3 后端的 Hydra 键翻译):
 #
@@ -69,12 +68,13 @@
 #   path: runs/train/custom_ft    # 实验输出目录 → paths.experiment_log_dir
 #
 # 说明:
-#   - 上面 train.* 的每个旋钮都映射到后端配置里确认存在的键 (已在官方 roboflow
-#     参考配置与本 fork 模板中逐一核实), 未列出的长尾参数用 overrides 透传
+#   - 上面 train.* 的每个旋钮都映射到后端配置里确认存在的键 (已对照官方 roboflow
+#     参考配置与 sam3_image.yaml 的 hydra 段逐一核实), 未列出的长尾参数用 overrides 透传
 #   - paths.bpe_path 由前端自动注入为子模块内绝对路径, 不用配
 #   - data.config 的数据集注入依赖标准 Hydra 键 (paths.dataset_root /
-#     trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合模板
-#     custom_image_ft.yaml 使用; 直接用后端自带配置时数据路径在其 paths 段里改
+#     trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合
+#     configs/models/sam3_image.yaml 使用 (其 hydra 段含这些键); 直接用后端
+#     自带配置时数据路径在其 paths 段里改
 #
 # 运行:
 #   python sam.py configs/train/<your_config>.yaml
@@ -89,7 +89,7 @@
 # 重要提醒 (后端参考配置的默认值是 Meta 为集群评测设计的, 直接用会踩坑):
 #   1. 参考配置 submitit.use_cluster 默认 True —— 本地训练必须在前端 YAML 显式 use_cluster: 0
 #   2. 参考配置 trainer.skip_saving_ckpts 默认 true —— 微调前务必用 overrides 改成 false, 否则不存 checkpoint
-#      (本 fork 模板 custom_image_ft.yaml 里已设为 false)
+#      (configs/models/sam3_image.yaml 的 hydra 段已设为 false)
 #   3. pretrained 不配则默认 load_from_HF=True, 自动从 HuggingFace 下载 sam3 原版权重 (gated repo 需 token),
 #      建议显式指向本地 .pt
 #   4. 数据格式: COCO (img_folder + _annotations.coco.json), 类别 name 即文本 prompt

@@ -61,7 +61,7 @@ train:
 
   # ── 任意 Hydra 覆盖 (原样透传; 同键时优先级最高) ──
   # 官方参考配置 trainer.skip_saving_ckpts 默认 true 不存 checkpoint,
-  # 要存权重必须保留下面这条 (fork 模板 custom_image_ft.yaml 里已默认 false)
+  # 要存权重必须保留下面这条 (configs/models/sam3_image.yaml 的 hydra 段已默认 false)
   overrides:
     - trainer.skip_saving_ckpts=false
 

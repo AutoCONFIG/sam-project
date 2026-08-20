@@ -19,9 +19,10 @@
 #   验证评测 GT 路径, trainer.data.train.dataset.limit_ids (num_images)
 #
 # 注意:
-#   - 数据集注入依赖这些标准 Hydra 键, 请配合前端模板
-#     sam3/sam3/train/configs/custom_image_ft.yaml 使用; 直接用后端自带配置
-#     (roboflow_v100 等) 时, 数据路径在那些配置自己的 paths 段里改
+#   - 数据集注入依赖这些标准 Hydra 键, 请配合模型配置
+#     configs/models/sam3_image.yaml 使用 (其 hydra: 段含这些键); 直接用后端
+#     自带配置 (roboflow_v100 等, 经 hydra_config 引用) 时, 数据路径在那些
+#     配置自己的 paths 段里改
 #   - COCO categories[].name 即开放词表检测的文本 prompt, 类别名要有语义
-#   - 分割训练需要 json 里带 segmentation (polygon 或 RLE), 并在模板里开启
-#     (见 custom_image_ft.yaml 中 custom_data 末尾的 4 处联动说明)
+#   - 分割训练需要 json 里带 segmentation (polygon 或 RLE), 并在模型配置的
+#     hydra: 段里开启 (见 sam3_image.yaml 中 custom_data 末尾的 4 处联动说明)

@@ -38,7 +38,7 @@ sam-project/
 │   ├── predict/video_text_sam3.yaml# sam3 原版推理配置示例 (需 ≥24GB)
 │   ├── export/default.yaml         # ONNX 导出配置示例
 │   ├── train/                      # 训练入口配置 (model/data/train/output 分区 + README)
-│   ├── models/                     # 模型网络配置 (hydra_config/pretrained/resolution/网络 overrides)
+│   ├── models/                     # 模型网络配置 (hydra: 段平铺完整训练配置 + pretrained/resolution/网络 overrides)
 │   └── datasets/                   # 独立数据集配置 (COCO 格式, 由 train 配置的 data.config 引用)
 ├── docs/
 │   ├── HANDOVER.md                 # 本文件
@@ -115,15 +115,15 @@ sam-project/
 - CLI 参数透传（`--num-gpus`, `--use-cluster`, `--partition`, `--account`, `--qos`, `--num-nodes`）
 - SAM3 Hydra 训练脚本存在，依赖已安装（hydra 1.3.5, submitit）
 - 15+ 个 Hydra 训练配置文件存在于 `sam3/sam3/train/configs/`（roboflow_v100, odinw13, saco_video_evals 等）
-- ✅ 前端训练配置分区为 `model`（`config` 引用 `configs/models/` 模型网络配置： hydra_config/pretrained/resolution/网络 overrides）/ `data`（`config` 引用独立数据集 YAML）/ `train`（资源与旋钮）/ `output`（`path` → `paths.experiment_log_dir`），示例 `configs/train/custom_finetune.yaml`
-- ✅ 数据集配置独立成 `configs/datasets/*.yaml`（path/train/val/ann_file/num_images），前端翻译为 `paths.dataset_root` + `trainer.data.{train,val}.dataset.{img_folder,ann_file}` + 验证 GT 路径等 override；依赖模板标准键，配合 `custom_image_ft.yaml` 使用
+- ✅ 前端训练配置分区为 `model`（`config` 引用 `configs/models/` 模型网络配置：`hydra:` 段平铺完整训练配置 + pretrained/resolution/网络 overrides；`hydra_config` 为指向子模块现成配置的逃生舱）/ `data`（`config` 引用独立数据集 YAML）/ `train`（资源与旋钮）/ `output`（`path` → `paths.experiment_log_dir`），示例 `configs/train/custom_finetune.yaml`
+- ✅ 数据集配置独立成 `configs/datasets/*.yaml`（path/train/val/ann_file/num_images），前端翻译为 `paths.dataset_root` + `trainer.data.{train,val}.dataset.{img_folder,ann_file}` + 验证 GT 路径等 override；依赖模板标准键，配合 `configs/models/sam3_image.yaml` 使用（其 hydra 段含这些键）
 - ✅ `paths.bpe_path` 自动注入子模块内绝对路径，无需手配
 - ✅ 训练旋钮全量前端直配（23 个，均映射到后端配置里逐一核实存在的键，默认值与后端一致，删掉/留空即不改）：batch/epochs/lr_scale/weight_decay/lrd/scheduler_timescale/scheduler_warmup/scheduler_cooldown/grad_accum/grad_clip/amp/amp_dtype/val_freq/skip_first_val/val_batch/workers/val_workers/max_ann_per_img/save_freq/log_freq/seed/timeout_hour/cpus_per_task（映射表 `commands/train.py: TRAIN_KEY_MAP`）；长尾键走 `train.overrides` 透传
 - ✅ subprocess 透传 `PYTHONPATH=<sam3 子模块>`，未 `pip install -e sam3` 也能 import
 - ✅ `build_sam3_image_model(image_size=...)` 训练链路分辨率参数化（须为 336 倍数）
 
 **后端机制备忘（2026-08-19 代码走读确认）：**
-- 后端 `-c` 是 Hydra config 名，相对于 `sam3/sam3/train/`（`initialize_config_module` 限制，配置必须在子模块内）；前端已屏蔽此细节——`model.config` 写前端相对路径即可，自定义模板 `custom_image_ft.yaml` 直接放在子模块 `configs/` 下
+- 后端 `-c` 是 Hydra config 名，相对于 `sam3/sam3/train/`（`initialize_config_module` 限制，配置必须在子模块内）；前端已屏蔽此细节——`model.config` 写前端相对路径即可，模型配置的 `hydra:` 段在启动时按文本原样生成到子模块 `configs/_custom/<文件名>.yaml`（自动管理，内容不变不重写，勿手改）；`hydra_config` 字段保留为指向子模块内现成配置（如官方 roboflow 参考配置）的逃生舱
 - 参考配置默认 `submitit.use_cluster: True`（本地必须显式 `--use-cluster 0`）且 `trainer.skip_saving_ckpts: true`（微调必须改 false，否则不存 checkpoint）
 - 预训练权重：`trainer.model.checkpoint_path` 指向本地 .pt；不配则 `load_from_HF=True` 默认从 HF 下载 sam3 原版（gated repo 需 token）
 - 数据格式为 COCO（img_folder + `_annotations.coco.json`），文本 prompt = `categories[].name`；只支持图片级训练（video dataset 类存在但无训练配置）
@@ -183,7 +183,7 @@ fork 的 main 分支包含以下修改（commit `bfa05a7`）：
 
 5. **`sam3/train/train.py`** — 接受前端透传的 Hydra overrides（`parse_known_args` 收集 + `compose(overrides=)`）
 
-6. **`sam3/train/configs/custom_image_ft.yaml`** — 自定义 COCO 数据集图片微调模板（相对 roboflow 参考配置：`skip_saving_ckpts: false`、`use_cluster: False`、无 job_array、`paths.dataset_root` 由前端数据集 YAML 注入）
+6. **`.gitignore`** — 忽略 `sam3/train/configs/_custom/`（前端启动训练时由 `configs/models/*.yaml` 的 `hydra:` 段自动生成的 Hydra 配置目录）；原自定义模板 `custom_image_ft.yaml` 已移出子模块，完整平铺在主仓库 `configs/models/sam3_image.yaml` 的 `hydra:` 段（相对 roboflow 参考配置：`skip_saving_ckpts: false`、`use_cluster: False`、无 job_array、`paths.dataset_root` 由前端数据集 YAML 注入）
 
 ## 6. 环境信息
 
@@ -222,7 +222,7 @@ SAM3 和 SAM3.1 是**同一模型的版本迭代**（不是不同任务）：
 1. **推理端到端验证** — 用 sam3.1 + 672 跑通重构后的 predict（输出形态跟随 + 标签导出）
 2. **训练实际跑通验证** — 用 SAM3 自带的 roboflow 配置试跑（需下载数据集）
 3. **微调工作流封装** — 预训练权重加载 → 自定义数据 fine-tune → checkpoint 保存
-4. ~~训练配置模板~~（已完成：`sam3/sam3/train/configs/custom_image_ft.yaml` + 独立 `configs/datasets/`）
+4. ~~训练配置模板~~（已完成：完整 Hydra 配置平铺在 `configs/models/sam3_image.yaml` 的 `hydra:` 段，启动时生成进子模块 `configs/_custom/`；+ 独立 `configs/datasets/`）
 5. **点/框提示推理** — predict 命令增加 `--points`/`--boxes` 参数
 6. ~~checkpoint 管理~~（已完成：predict `model.finetune_ckpt` → detector 运行时加载，见 3.3 缺失项）
 7. **Windows 推理+ONNX 导出评估** — 评估 Win 下能否跑推理和导出（基本开发用，重活留 Linux）
