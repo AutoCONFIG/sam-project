@@ -2,18 +2,24 @@
 # =====================
 #
 # 配置按用途分成独立 YAML (参照 yolo-project 的分离模式):
-#   configs/train/xxx.yaml    — 训练入口配置 (本目录), mode: train, 由 sam.py 读取
-#   configs/models/xxx.yaml   — 模型配置 (hydra: 段平铺完整训练配置), 由训练配置的 model 字段引用
-#   configs/datasets/xxx.yaml — 数据集配置 (COCO 格式), 由训练配置的 data.config 引用
-#   configs/export/xxx.yaml   — ONNX 导出配置, mode: export (独立命令, 见 configs/export/)
+#   configs/train/xxx.yaml            — 训练入口配置 (本目录), mode: train, 由 sam.py 读取
+#   configs/train/template_image.yaml — 训练模板: 训练超参数全集 (transforms/loss/优化器
+#                                       /调度器/评测/分布式默认值), 由入口配置的 template 字段引用
+#   configs/models/xxx.yaml           — 模型配置 (只定义模型构建 trainer.model; 网络结构在
+#                                       后端代码 build_sam3_image_model 里), 由 model 字段引用
+#   configs/datasets/xxx.yaml         — 数据集配置 (COCO 格式), 由训练配置的 data.config 引用
+#   configs/export/xxx.yaml           — ONNX 导出配置, mode: export (独立命令, 见 configs/export/)
 #
-# 训练涉及两层配置:
-#   1. 前端训练配置 (本目录): model / resolution / data / train / output
-#   2. Hydra 训练配置: 完整的训练参数 (模型结构/transforms/优化器/loss),
-#      完整平铺在模型配置 (configs/models/sam3_image.yaml) 的 hydra: 段里,
-#      启动训练时前端原样生成到子模块 sam3/sam3/train/configs/_custom/
-#      <文件名>.yaml 再传给后端 (Hydra initialize_config_module 要求配置
-#      必须在 sam3.train 包内, 见 sam3/sam3/train/train.py; 生成文件勿手改)
+# 训练涉及三层前端配置:
+#   1. 训练入口 (本目录 xxx.yaml): model / resolution / data / train 旋钮 / output / template
+#   2. 训练模板 (template_image.yaml): 后端 Hydra 配置全量默认值 (除模型定义),
+#      未做成旋钮的长尾参数直接改这里
+#   3. 模型配置 (configs/models/sam3_image.yaml): 只有 trainer.model 构建调用
+#      (本后端网络结构由代码构建, yaml 不可配)
+# 启动训练时前端把模板与模型配置的 trainer.model 段文本合并, 生成到子模块
+# sam3/sam3/train/configs/_custom/<模板文件名>.yaml 再传给后端
+# (Hydra initialize_config_module 要求配置必须在 sam3.train 包内,
+#  见 sam3/sam3/train/train.py; 生成文件勿手改)
 #
 # model 字段 (标量; 预训练微调不改变网络结构, 指权重即可):
 #   model: pretrain/sam3/sam3.pt           # 权重 .pt = 预训练微调 (默认模型配置 sam3_image.yaml)
@@ -31,6 +37,7 @@
 # model: pretrain/sam3/sam3.pt   # 权重 .pt=微调 / 模型配置 .yaml=从头训练 / hf 或不写=HF 下载微调
 # resolution: 1008               # 训练分辨率, 336 的倍数
 # # hydra_config: sam3/sam3/train/configs/...   # 逃生舱: 直接用子模块内现成配置
+# template: configs/train/template_image.yaml   # 训练模板 (超参数全集), 可省略
 # data:
 #   config: configs/datasets/roboflow_vl_100.yaml   # 数据集配置 (独立 YAML, 见 configs/datasets/)
 # train:
@@ -60,6 +67,20 @@
 #   val_freq: 10            # → trainer.val_epoch_freq
 #   skip_first_val: true    # → trainer.skip_first_val
 #   val_batch: 1            # → scratch.val_batch_size
+#   early_stop: false       # → trainer.early_stop.enabled (按验证次数计)
+#   early_stop_patience: 5  # → trainer.early_stop.patience
+#   # 损失权重 / 匹配器成本 (默认=官方值, 一般不用动; 源在 custom_data.loss / scratch.matcher)
+#   loss_bbox: 5.0          # 框 L1 损失权重 (loss_fns_find.0=Boxes)
+#   loss_giou: 2.0          # 框 GIoU 损失权重 (小目标多可适当抬高)
+#   loss_ce: 20.0           # 分类 BCE 损失权重 (loss_fns_find.1=IABCEMdetr)
+#   presence_loss: 20.0     # presence 损失权重
+#   pos_weight: 10.0        # 分类正样本 BCE 权重
+#   focal_alpha: 0.25       # focal α
+#   focal_gamma: 2          # focal γ
+#   o2m_weight: 2.0         # one-to-many 辅助分支权重
+#   matcher_cost_class: 2.0 # → scratch.matcher.cost_class (匈牙利匹配成本)
+#   matcher_cost_bbox: 5.0  # → scratch.matcher.cost_bbox
+#   matcher_cost_giou: 2.0  # → scratch.matcher.cost_giou
 #   # 数据加载
 #   workers: 10             # → scratch.num_train_workers (Windows 建议 0)
 #   val_workers: 0          # → scratch.num_val_workers
@@ -73,13 +94,16 @@
 #
 # 说明:
 #   - 上面 train.* 的每个旋钮都映射到后端配置里确认存在的键 (已对照官方 roboflow
-#     参考配置与 sam3_image.yaml 的 hydra 段逐一核实); 未列出的长尾参数直接编辑
-#     模型配置的 hydra 段 (那里是完整平铺的全部训练配置)
+#     参考配置与训练模板 template_image.yaml 逐一核实); 未列出的长尾参数直接编辑
+#     训练模板 (那里是完整平铺的全部训练配置)
+#   - 损失权重旋钮覆盖的是 custom_data.loss 源 (经插值进 trainer.loss.all, 无法从
+#     trainer 侧覆盖); 用 hydra_config 逃生舱时自动改指 roboflow_train.loss
+#     (官方参考配置段名不同, 结构相同)
 #   - paths.bpe_path 由前端自动注入为子模块内绝对路径, 不用配
 #   - data.config 的数据集注入依赖标准 Hydra 键 (paths.dataset_root /
-#     trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合
-#     configs/models/sam3_image.yaml 使用 (其 hydra 段含这些键); 直接用后端
-#     自带配置时数据路径在其 paths 段里改
+#     trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合训练模板
+#     template_image.yaml 使用 (含这些键); 直接用后端自带配置时数据路径在其
+#     paths 段里改
 #
 # 运行:
 #   python sam.py configs/train/<your_config>.yaml
@@ -94,7 +118,7 @@
 # 重要提醒 (后端参考配置的默认值是 Meta 为集群评测设计的, 直接用会踩坑):
 #   1. 参考配置 submitit.use_cluster 默认 True —— 本地训练必须在前端 YAML 显式 use_cluster: 0
 #   2. 参考配置 trainer.skip_saving_ckpts 默认 true —— 微调前务必显式 skip_saving_ckpts: false,
-#      否则不存 checkpoint (configs/models/sam3_image.yaml 的 hydra 段已设为 false)
+#      否则不存 checkpoint (训练模板 template_image.yaml 已设为 false)
 #   3. model 不写或写 hf 则默认 load_from_HF=True, 自动从 HuggingFace 下载 sam3 原版权重
 #      (gated repo 需 token), 建议显式指向本地 .pt
 #   4. 数据格式: COCO (img_folder + _annotations.coco.json), 类别 name 即文本 prompt

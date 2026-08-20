@@ -11,7 +11,7 @@ mode: train
 # 模型: 权重 .pt = 预训练微调 / hf 或删掉 = HF 下载官方权重 / 模型配置 .yaml = 从头训练
 model: pretrain/sam3/sam3.pt
 
-# 逃生舱: 直接使用子模块内官方参考配置 (绕过默认模型配置 configs/models/sam3_image.yaml)
+# 逃生舱: 直接使用子模块内官方参考配置 (绕过训练模板 template_image.yaml + 默认模型配置)
 hydra_config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
 
 resolution: 1008        # 训练分辨率, 336 的倍数
@@ -50,6 +50,21 @@ train:
   val_freq: 10          # → trainer.val_epoch_freq
   skip_first_val: true  # → trainer.skip_first_val
   val_batch: 1          # → scratch.val_batch_size
+  early_stop: false     # 早停开关 → trainer.early_stop.enabled (按验证次数计)
+  early_stop_patience: 5  # → trainer.early_stop.patience
+
+  # ── 损失权重 / 匹配器成本 (默认=官方值; 一般不用动, 明确知道问题再调) ──
+  loss_bbox: 5.0        # 框 L1 损失权重
+  loss_giou: 2.0        # 框 GIoU 损失权重 (小目标多可适当抬高)
+  loss_ce: 20.0         # 分类 BCE 损失权重
+  presence_loss: 20.0   # presence 损失权重
+  pos_weight: 10.0      # 分类正样本 BCE 权重
+  focal_alpha: 0.25     # focal α
+  focal_gamma: 2        # focal γ
+  o2m_weight: 2.0       # one-to-many 辅助分支权重
+  matcher_cost_class: 2.0  # 匈牙利匹配分类成本 → scratch.matcher.cost_class
+  matcher_cost_bbox: 5.0   # 匈牙利匹配 bbox 成本
+  matcher_cost_giou: 2.0   # 匈牙利匹配 GIoU 成本
 
   # ── 数据加载 ──
   workers: 10           # → scratch.num_train_workers

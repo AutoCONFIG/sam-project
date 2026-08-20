@@ -74,6 +74,10 @@ BPE_PATH = SAM3_ROOT / "sam3" / "assets" / "bpe_simple_vocab_16e6.txt.gz"
 # 默认模型配置 (model 字段指向权重或缺省时使用)
 DEFAULT_MODEL_CONFIG = "configs/models/sam3_image.yaml"
 
+# 默认训练模板 (后端 Hydra 配置全量默认值: transforms/loss/优化器等超参数;
+# 模型定义在模型配置里, 物化时文本合并)
+DEFAULT_TEMPLATE = "configs/train/template_image.yaml"
+
 # 数据集 YAML 注入依赖 Hydra 配置里的标准键 (paths.dataset_root /
 # trainer.data.{train,val}.dataset.*), 即模型配置 sam3_image.yaml hydra 段的
 # 结构; 后端自带配置 (roboflow_v100 等) 路径键名不同, 不支持数据集 YAML 注入
@@ -82,7 +86,7 @@ _DEFAULT_VAL_SUBDIR = "valid"
 _DEFAULT_ANN_FILE = "_annotations.coco.json"
 
 # 训练旋钮 → Hydra 键映射: 键均已对照官方 roboflow 参考配置与
-# configs/models/sam3_image.yaml 的 hydra 段逐一核实存在且语义一致
+# 训练模板 configs/train/template_image.yaml 逐一核实存在且语义一致
 TRAIN_KEY_MAP = {
     "batch": "scratch.train_batch_size",
     "epochs": "trainer.max_epochs",
@@ -105,6 +109,23 @@ TRAIN_KEY_MAP = {
     "save_freq": "trainer.checkpoint.save_freq",    # 0=只存最后一个
     "log_freq": "trainer.logging.log_freq",
     "skip_saving_ckpts": "trainer.skip_saving_ckpts",  # 微调必须 false
+    "early_stop": "++trainer.early_stop.enabled",      # 早停开关 (按验证次数计)
+    "early_stop_patience": "++trainer.early_stop.patience",  # 连续 N 次验证无改进即停
+    # ── 损失权重 / 匹配器成本 ──
+    # loss 段源在 custom_data.loss (经插值 ${custom_data.loss} 进 trainer.loss.all,
+    # 无法从 trainer 侧覆盖, 必须覆盖源); loss_fns_find 列表顺序固定: 0=Boxes 1=IABCEMdetr;
+    # hydra_config 逃生舱指向官方参考配置时段名不同, train() 里统一换成 roboflow_train
+    "loss_bbox": "custom_data.loss.loss_fns_find.0.weight_dict.loss_bbox",
+    "loss_giou": "custom_data.loss.loss_fns_find.0.weight_dict.loss_giou",  # 小目标多可适当抬高
+    "loss_ce": "custom_data.loss.loss_fns_find.1.weight_dict.loss_ce",
+    "presence_loss": "custom_data.loss.loss_fns_find.1.weight_dict.presence_loss",
+    "pos_weight": "custom_data.loss.loss_fns_find.1.pos_weight",  # 分类 BCE 正样本权重
+    "focal_alpha": "custom_data.loss.loss_fns_find.1.alpha",
+    "focal_gamma": "custom_data.loss.loss_fns_find.1.gamma",
+    "o2m_weight": "custom_data.loss.o2m_weight",            # one-to-many 辅助分支权重
+    "matcher_cost_class": "scratch.matcher.cost_class",     # 匈牙利匹配分类成本
+    "matcher_cost_bbox": "scratch.matcher.cost_bbox",
+    "matcher_cost_giou": "scratch.matcher.cost_giou",
     "seed": "trainer.seed_value",
     "timeout_hour": "submitit.timeout_hour",        # 仅集群
     "cpus_per_task": "submitit.cpus_per_task",      # 仅集群
@@ -134,7 +155,7 @@ model 字段 (标量): 权重 .pt = 预训练微调 (默认模型配置 configs/
 
     parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
     parser.add_argument("--sam3-config", type=str, default=None,
-                        help="顶层 hydra_config 的 CLI 形式: 直接指定子模块内的 Hydra 训练配置 (绕过模型配置的 hydra 段)")
+                        help="顶层 hydra_config 的 CLI 形式: 直接指定子模块内的 Hydra 训练配置 (绕过训练模板+模型配置)")
     parser.add_argument("--data", type=str, default=None,
                         help="数据集配置路径 (如 configs/datasets/xxx.yaml)")
     parser.add_argument("--use-cluster", type=int, default=None, choices=[0, 1],
@@ -185,7 +206,8 @@ def resolve_hydra_config(config_value: str) -> str:
         raise ValueError(
             f"Hydra 训练配置必须位于 sam3 子模块内 (sam3/sam3/train/configs/):\n"
             f"  {path}\n"
-            f"自定义训练请用 configs/models/ 模型配置的 hydra: 段 (平铺完整配置)"
+            f"自定义训练请用训练模板 configs/train/template_image.yaml "
+            f"+ configs/models/ 模型配置 (trainer.model 段)"
         )
 
 
@@ -200,25 +222,12 @@ def _resolve_frontend_path(value: str, must_exist: bool = False) -> Path:
     return path
 
 
-def materialize_hydra_config(net_path: Path, net_cfg: Dict[str, Any]) -> str:
-    """把模型配置 (configs/models/xxx.yaml) 的 ``hydra:`` 段原样落到子模块
-    ``sam3/sam3/train/configs/_custom/<模型配置文件名>.yaml``, 返回 Hydra config 名。
-
-    Hydra initialize_config_module 要求配置必须在 sam3.train 模块内, 所以平铺在
-    前端模型配置里的完整训练配置要生成进子模块才能被后端加载。按文本原样搬运
-    (不经 YAML 序列化往返), ``${...}`` 插值与注释完全保真; 内容不变时不重写,
-    避免无意义的 mtime 变化。
-    """
-    if not isinstance(net_cfg.get("hydra"), dict):
-        raise ValueError(
-            f"模型配置缺少 hydra 段 (完整 Hydra 训练配置的平铺内容): {net_path}\n"
-            f"或用训练配置顶层 hydra_config 字段指向子模块内现成配置"
-        )
-    lines = net_path.read_text(encoding="utf-8").splitlines()
+def _extract_hydra_lines(path: Path) -> List[str]:
+    """提取 yaml 顶层 ``hydra:`` 段的文本行 (去 2 空格缩进; 未缩进注释行保留)。"""
+    lines = path.read_text(encoding="utf-8").splitlines()
     start = next((i for i, line in enumerate(lines) if line == "hydra:"), None)
     if start is None:
-        raise ValueError(f"模型配置里找不到顶层 hydra: 段: {net_path}")
-
+        raise ValueError(f"配置里找不到顶层 hydra: 段: {path}")
     body: List[str] = []
     for line in lines[start + 1:]:
         if not line.strip():
@@ -229,14 +238,57 @@ def materialize_hydra_config(net_path: Path, net_cfg: Dict[str, Any]) -> str:
             body.append(line)   # 未缩进的注释行也保留
         else:
             break               # 回到顶层键 → hydra 段结束
+    return body
+
+
+def materialize_hydra_config(tpl_path: Path, net_path: Path, net_cfg: Dict[str, Any]) -> str:
+    """把训练模板 (configs/train/template_image.yaml) 与模型配置
+    (configs/models/xxx.yaml) 的 ``trainer.model`` 段做文本合并, 落到子模块
+    ``sam3/sam3/train/configs/_custom/<模板文件名>.yaml``, 返回 Hydra config 名。
+
+    Hydra initialize_config_module 要求配置必须在 sam3.train 模块内, 所以平铺在
+    前端的完整训练配置要生成进子模块才能被后端加载。按文本原样搬运 (不经 YAML
+    序列化往返), ``${...}`` 插值与注释完全保真; 内容不变时不重写, 避免无意义的
+    mtime 变化。模板里的 ``__MODEL_BLOCK__`` 占位行被替换为模型配置的 model 段。
+    """
+    if not isinstance(net_cfg.get("hydra"), dict) \
+            or not isinstance(net_cfg["hydra"].get("trainer"), dict) \
+            or not isinstance(net_cfg["hydra"]["trainer"].get("model"), dict):
+        raise ValueError(
+            f"模型配置缺少 hydra.trainer.model 段 (模型构建定义): {net_path}\n"
+            f"或用训练配置顶层 hydra_config 字段指向子模块内现成配置"
+        )
+
+    # ── 模型配置: 提取 trainer.model 段文本 (去缩进后 model: 在 trainer: 下 2 空格) ──
+    net_lines = _extract_hydra_lines(net_path)
+    try:
+        trainer_idx = net_lines.index("trainer:")
+        model_idx = next(i for i in range(trainer_idx + 1, len(net_lines))
+                         if net_lines[i].startswith("  model:"))
+    except (ValueError, StopIteration):
+        raise ValueError(f"模型配置的 hydra 段里找不到 trainer.model: {net_path}") from None
+    block: List[str] = []
+    for line in net_lines[model_idx:]:
+        if block and line.strip() and not line.startswith("    "):
+            break               # model 段的子键/注释缩进 ≥4; 同级或更浅的键 → 段结束
+        block.append(line)
+
+    # ── 模板: __MODEL_BLOCK__ 占位行替换为模型段 ──
+    tpl_lines = _extract_hydra_lines(tpl_path)
+    try:
+        slot = next(i for i, line in enumerate(tpl_lines) if "__MODEL_BLOCK__" in line)
+    except StopIteration:
+        raise ValueError(f"训练模板缺少 __MODEL_BLOCK__ 占位行: {tpl_path}") from None
+    # 提取后文本里 trainer 的子键在 2 空格缩进, model 段文本缩进正好匹配, 直接拼接
+    body = tpl_lines[:slot] + block + tpl_lines[slot + 1:]
     text = "# @package _global_\n" + "\n".join(body).strip("\n") + "\n"
 
     custom_dir = HYDRA_CONFIG_ROOT / "configs" / "_custom"
     custom_dir.mkdir(parents=True, exist_ok=True)
-    dst = custom_dir / (net_path.stem + ".yaml")
+    dst = custom_dir / (tpl_path.stem + ".yaml")
     if not dst.exists() or dst.read_text(encoding="utf-8") != text:
         dst.write_text(text, encoding="utf-8")
-        print(f"已由模型配置生成 Hydra 配置: {dst}")
+        print(f"已由训练模板+模型配置生成 Hydra 配置: {dst}")
     return f"configs/_custom/{dst.name}"
 
 
@@ -264,8 +316,8 @@ def _normalize_gpu_ids(value: Any) -> Optional[List[int]]:
 def build_dataset_overrides(data_config_value: str) -> List[str]:
     """把独立的数据集 YAML (configs/datasets/xxx.yaml) 翻译为 Hydra overrides。
 
-    覆盖的都是标准键 (模型配置 sam3_image.yaml hydra 段与后端 roboflow 参考配置
-    共有的 Sam3ImageDataset 键), 用 ``=``; paths.dataset_root 只有 hydra 段有。
+    覆盖的都是标准键 (训练模板 template_image.yaml 与后端 roboflow 参考配置
+    共有的 Sam3ImageDataset 键), 用 ``=``; paths.dataset_root 只有模板里有。
     """
     ds_path = _resolve_frontend_path(data_config_value, must_exist=True)
     ds = load_yaml_config(str(ds_path)) or {}
@@ -338,7 +390,7 @@ def train(config: Dict) -> None:
 
     # ── model 字段 (标量多态; 预训练微调不改变网络结构, 指权重即可) ──
     #   权重 .pt   → 预训练微调 (默认模型配置 DEFAULT_MODEL_CONFIG), 注入 checkpoint_path
-    #   配置 .yaml → 从头训练 (该模型配置的 hydra 段), 注入 load_from_HF=false
+    #   配置 .yaml → 从头训练 (模型构建定义), 注入 load_from_HF=false
     #   hf / 缺省  → HF 下载官方权重微调 (后端默认 load_from_HF=True, 不注入)
     model_val = config.get("model")
     if isinstance(model_val, dict):
@@ -364,13 +416,17 @@ def train(config: Dict) -> None:
     net_cfg = load_yaml_config(str(net_path)) or {}
 
     # Hydra 配置来源: 顶层 hydra_config 逃生舱 (--sam3-config) 指向子模块内现成
-    # 配置 (如官方 roboflow 参考配置); 否则用模型配置里平铺的 hydra: 段
-    # (启动时按文本原样生成进子模块 configs/_custom/)
+    # 配置 (如官方 roboflow 参考配置); 否则用训练模板 (template 字段, 默认
+    # template_image.yaml) + 模型配置的 trainer.model 段, 启动时文本合并
+    # 生成进子模块 configs/_custom/
     hydra_ref = config.get("hydra_config")
+    tpl_ref: Optional[str] = None
     if hydra_ref:
         sam3_config = resolve_hydra_config(str(hydra_ref))
     else:
-        sam3_config = materialize_hydra_config(net_path, net_cfg)
+        tpl_ref = str(config.get("template") or DEFAULT_TEMPLATE)
+        tpl_path = _resolve_frontend_path(tpl_ref, must_exist=True)
+        sam3_config = materialize_hydra_config(tpl_path, net_path, net_cfg)
 
     resolution = config.get("resolution")
 
@@ -423,6 +479,12 @@ def train(config: Dict) -> None:
         **{k: train_cfg.get(k) for k in TRAIN_KEY_MAP},
     })
     hydra_overrides = _dedupe_overrides(hydra_overrides)
+    if hydra_ref:
+        # 逃生舱指向官方参考配置: 数据/loss 段名为 roboflow_train (结构与 custom_data 相同)
+        hydra_overrides = [
+            o.replace("custom_data.", "roboflow_train.", 1) if o.startswith("custom_data.") else o
+            for o in hydra_overrides
+        ]
 
     cmd = [sys.executable, str(train_script), "-c", sam3_config]
 
@@ -451,6 +513,8 @@ def train(config: Dict) -> None:
     else:
         print(f"模型: HF 官方权重 (自动下载, 微调)")
     print(f"模型配置: {net_ref}")
+    if tpl_ref:
+        print(f"训练模板: {tpl_ref}")
     print(f"Hydra config: {sam3_config}")
     if resolution is not None:
         print(f"分辨率: {resolution}")
