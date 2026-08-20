@@ -1,6 +1,6 @@
 # SAM3 Project 交接文档
 
-> 最后更新：2026-08-19
+> 最后更新：2026-08-20
 > 仓库：`git@github.com:AutoCONFIG/sam-project.git`
 > 子模块：`git@github.com:AutoCONFIG/sam3.git` (fork, 分支 main)
 
@@ -123,6 +123,12 @@ sam-project/
 - ✅ subprocess 透传 `PYTHONPATH=<sam3 子模块>`，未 `pip install -e sam3` 也能 import
 - ✅ `build_sam3_image_model(image_size=...)` 训练链路分辨率参数化（须为 336 倍数）
 - ✅ 早停与真冻结（2026-08-20，后端 `trainer.py` 最小新增）：`trainer.early_stop`（enabled/patience/metric/mode/min_delta，按验证次数计，rank 0 判定 + broadcast；指标键后缀匹配，找不到只警告不误停）与 `trainer.freeze`（unix pattern 真冻结 `requires_grad=False`——不算梯度/不进优化器（经 `construct_optimizer` 的 `param_allowlist` 排除）/DDP 不同步，比 lr=0 省算力省显存）；默认值在训练模板 `configs/train/template_image.yaml` 的 trainer 节，开关与 patience 有前端旋钮
+
+**提交与验证记录（2026-08-20）：**
+- 子模块 `9beb10a`：trainer.py 早停 + 真冻结
+- 主仓库 `20fa746`：训练模板拆分（template_image.yaml / models 瘦身 / `__MODEL_BLOCK__` 文本合并）+ 损失权重与匹配器 11 旋钮 + 早停/冻结前端接入
+- 验证方式：开发机无 Python，仅静态验证——awk 模拟模板合并流程、生成配置与 HEAD 语义 diff（逐键一致，仅多 freeze/early_stop 7 行）、逐行走读 diff；静态走读曾抓到并修复 2 个合并逻辑 bug（块提取首行误 break、缩进多加一层）
+- 未实测项（待真机首跑确认）：hydra 列表索引覆盖语法（`custom_data.loss.loss_fns_find.0.weight_dict.*`）、`++trainer.early_stop.*` add-or-override、trainer.py 早停/冻结运行时行为、模板合并端到端
 
 **后端机制备忘（2026-08-19 代码走读确认）：**
 - 后端 `-c` 是 Hydra config 名，相对于 `sam3/sam3/train/`（`initialize_config_module` 限制，配置必须在子模块内）；前端已屏蔽此细节——训练模板与模型配置的 `trainer.model` 段在启动时文本合并生成到子模块 `configs/_custom/<模板文件名>.yaml`（自动管理，内容不变不重写，勿手改）；训练配置顶层 `hydra_config` 字段（或 CLI `--sam3-config`）为指向子模块内现成配置（如官方 roboflow 参考配置）的逃生舱
