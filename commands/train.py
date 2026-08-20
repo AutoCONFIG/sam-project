@@ -11,25 +11,35 @@ state constraints.
 
 Frontend config is split into independent YAMLs (see configs/):
 
-- ``configs/train/xxx.yaml``    — train entry: references model/data configs,
-  training knobs (train.*) and output dir (output.path)
-- ``configs/models/xxx.yaml``   — model network config: the complete training
+- ``configs/train/xxx.yaml``    — train entry: ``model`` / ``resolution`` /
+  ``data.config`` / training knobs (``train.*``) / output dir (``output.path``)
+- ``configs/models/xxx.yaml``   — model config: the complete Hydra training
   config flattened into its ``hydra:`` section (materialized into
   ``sam3/sam3/train/configs/_custom/`` at launch — Hydra requires configs to
-  live inside the ``sam3.train`` module), plus ``pretrained``, ``resolution``
-  and network-related ``overrides``. ``hydra_config`` is an escape hatch
-  pointing at a ready-made config inside the submodule (e.g. the official
-  roboflow reference config)
+  live inside the ``sam3.train`` module)
 - ``configs/datasets/xxx.yaml`` — dataset root + COCO split layout,
   translated into Hydra overrides (``paths.dataset_root``,
   ``trainer.data.*.dataset.img_folder/ann_file``)
 - ``configs/export/xxx.yaml``   — ONNX export (mode: export, separate command)
 
-Common knobs (``model.pretrained`` / ``model.resolution`` / ``train.batch`` /
-``train.epochs`` / ``train.device``) are translated into Hydra overrides, and
-``train.overrides`` passes any raw Hydra override through verbatim (the
-backend ``train.py`` forwards them to ``hydra.compose``). ``paths.bpe_path``
-is always injected as an absolute path into the submodule's assets.
+The train YAML ``model`` field is polymorphic (finetuning never changes the
+network architecture, so a weights file alone is enough):
+
+- ``pretrain/xxx.pt``  — finetune from these weights (using the default model
+  config ``configs/models/sam3_image.yaml``), injects
+  ``++trainer.model.checkpoint_path``
+- ``configs/models/xxx.yaml`` — train from scratch with that model config,
+  injects ``++trainer.model.load_from_HF=false``
+- ``hf`` or omitted    — finetune from the official HF weights (backend
+  default ``load_from_HF=True``; gated repo needs a token)
+
+Top-level ``hydra_config`` (or CLI ``--sam3-config``) is an escape hatch
+pointing at a ready-made config inside the submodule (e.g. the official
+roboflow reference config). ``resolution`` and ``train.*`` knobs are
+translated into Hydra overrides, and ``train.overrides`` passes any raw Hydra
+override through verbatim (the backend ``train.py`` forwards them to
+``hydra.compose``). ``paths.bpe_path`` is always injected as an absolute path
+into the submodule's assets.
 
 Usage::
 
@@ -61,6 +71,9 @@ HYDRA_CONFIG_ROOT = SAM3_ROOT / "sam3" / "train"
 
 # BPE tokenizer 资源 (子模块内, 注入为绝对路径)
 BPE_PATH = SAM3_ROOT / "sam3" / "assets" / "bpe_simple_vocab_16e6.txt.gz"
+
+# 默认模型配置 (model 字段指向权重或缺省时使用)
+DEFAULT_MODEL_CONFIG = "configs/models/sam3_image.yaml"
 
 # 数据集 YAML 注入依赖 Hydra 配置里的标准键 (paths.dataset_root /
 # trainer.data.{train,val}.dataset.*), 即模型配置 sam3_image.yaml hydra 段的
@@ -107,21 +120,22 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python sam.py configs/train/roboflow_finetune.yaml
-    python -m commands.train --config configs/train/roboflow_finetune.yaml --num-gpus 2
-    python sam.py configs/train/roboflow_finetune.yaml --batch-size 2 --resolution 672
-    python sam.py configs/train/roboflow_finetune.yaml --override scratch.lr_scale=0.05
+    python sam.py configs/train/custom_finetune.yaml
+    python -m commands.train --config configs/train/custom_finetune.yaml --num-gpus 2
+    python sam.py configs/train/custom_finetune.yaml --model pretrain/sam3/sam3.pt
+    python sam.py configs/train/custom_finetune.yaml --batch-size 2 --resolution 672
+    python sam.py configs/train/custom_finetune.yaml --override scratch.lr_scale=0.05
 
-model.config 指向模型网络配置 (configs/models/xxx.yaml); 其中 hydra: 段是完整
-平铺的训练配置 (启动时生成进子模块 configs/_custom/), 或用 hydra_config 字段
-直接指向子模块内现成配置, 如官方参考配置:
+model 字段 (标量): 权重 .pt = 预训练微调 (默认模型配置 configs/models/sam3_image.yaml)
+/ 模型配置 .yaml = 从头训练 / hf 或缺省 = HF 下载官方权重微调; 顶层 hydra_config
+字段 (--sam3-config) 可直接指向子模块内现成配置, 如官方参考配置:
     sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
         """,
     )
 
     parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
     parser.add_argument("--sam3-config", type=str, default=None,
-                        help="直接指定子模块内的 Hydra 训练配置 (绕过模型配置的 hydra 段)")
+                        help="顶层 hydra_config 的 CLI 形式: 直接指定子模块内的 Hydra 训练配置 (绕过模型配置的 hydra 段)")
     parser.add_argument("--data", type=str, default=None,
                         help="数据集配置路径 (如 configs/datasets/xxx.yaml)")
     parser.add_argument("--use-cluster", type=int, default=None, choices=[0, 1],
@@ -135,8 +149,8 @@ model.config 指向模型网络配置 (configs/models/xxx.yaml); 其中 hydra: �
                         help="实验输出目录 (checkpoints/tensorboard/logs)")
 
     # ── 常用训练参数 (翻译为 Hydra override) ──
-    parser.add_argument("--pretrained", type=str, default=None,
-                        help="预训练权重: 路径 / true (HF 自动下载, 默认) / false (从零训练)")
+    parser.add_argument("--model", type=str, default=None,
+                        help="模型: 权重 .pt=预训练微调 / 模型配置 .yaml=从头训练 / hf=HF 下载官方权重微调 (默认)")
     parser.add_argument("--batch-size", type=int, default=None,
                         help="每卡 batch size (scratch.train_batch_size)")
     parser.add_argument("--max-epochs", type=int, default=None,
@@ -200,7 +214,8 @@ def materialize_hydra_config(net_path: Path, net_cfg: Dict[str, Any]) -> str:
     """
     if not isinstance(net_cfg.get("hydra"), dict):
         raise ValueError(
-            f"模型配置缺少 hydra 段 (完整 Hydra 训练配置的平铺内容): {net_path}"
+            f"模型配置缺少 hydra 段 (完整 Hydra 训练配置的平铺内容): {net_path}\n"
+            f"或用训练配置顶层 hydra_config 字段指向子模块内现成配置"
         )
     lines = net_path.read_text(encoding="utf-8").splitlines()
     start = next((i for i, line in enumerate(lines) if line == "hydra:"), None)
@@ -285,27 +300,11 @@ def build_dataset_overrides(data_config_value: str) -> List[str]:
 def build_hydra_overrides(knobs: Dict[str, Any]) -> List[str]:
     """把前端常用配置翻译为 Hydra override 列表。
 
-    ``++`` 前缀 = 键可能不存在于参考配置中 (checkpoint_path/image_size/
-    load_from_HF 在参考配置的 model 段里都没有), 让 Hydra 自动 add-or-override;
-    其余映射的键都已在模板/参考配置里核实存在, 用普通 ``=``。
+    ``++`` 前缀 = 键可能不存在于参考配置中 (image_size 在参考配置的 model 段里
+    没有; checkpoint_path/load_from_HF 由 train() 按 model 字段注入), 让 Hydra
+    自动 add-or-override; 其余映射的键都已在模板/参考配置里核实存在, 用普通 ``=``。
     """
     overrides: List[str] = []
-
-    # pretrained: 路径 / true / false (YAML 里加引号的字符串形式也归一化)
-    pretrained = knobs.get("pretrained")
-    if isinstance(pretrained, str):
-        low = pretrained.strip().lower()
-        if low in ("false", "none", "null"):
-            pretrained = False
-        elif low == "true":
-            pretrained = None
-    if pretrained is False:
-        # 从零训练: 关掉 HF 自动下载即可 (checkpoint_path 缺省为 None)
-        overrides.append("++trainer.model.load_from_HF=false")
-    elif isinstance(pretrained, str):
-        ckpt = _resolve_frontend_path(pretrained.strip(), must_exist=True).as_posix()
-        overrides.append(f'++trainer.model.checkpoint_path="{ckpt}"')
-    # pretrained 缺省或为 true: 后端默认 load_from_HF=True, 自动从 HF 下载 sam3 权重
 
     resolution = knobs.get("resolution")
     if resolution is not None:
@@ -339,42 +338,47 @@ def build_hydra_overrides(knobs: Dict[str, Any]) -> List[str]:
 
 def train(config: Dict) -> None:
     """转发训练请求到 SAM3 Hydra 训练系统。"""
-    model_cfg: Dict[str, Any] = config.get("model") or {}
     train_cfg: Dict[str, Any] = config.get("train") or {}
     data_cfg: Dict[str, Any] = config.get("data") or {}
     output_cfg: Dict[str, Any] = config.get("output") or {}
 
-    # ── 模型网络配置 (configs/models/xxx.yaml) ──
-    model_ref = model_cfg.get("config")
-    if not model_ref:
+    # ── model 字段 (标量多态; 预训练微调不改变网络结构, 指权重即可) ──
+    #   权重 .pt   → 预训练微调 (默认模型配置 DEFAULT_MODEL_CONFIG), 注入 checkpoint_path
+    #   配置 .yaml → 从头训练 (该模型配置的 hydra 段), 注入 load_from_HF=false
+    #   hf / 缺省  → HF 下载官方权重微调 (后端默认 load_from_HF=True, 不注入)
+    model_val = config.get("model")
+    if isinstance(model_val, dict):
         raise ValueError(
-            "配置缺少 model.config (模型网络配置路径, 如 configs/models/sam3_image.yaml)"
+            "model 字段是标量, 不是分区:\n"
+            "  model: pretrain/sam3/sam3.pt           # 权重 = 预训练微调\n"
+            "  model: configs/models/sam3_image.yaml  # 模型配置 = 从头训练\n"
+            "  model: hf                              # 或不写 = HF 下载官方权重微调"
         )
-    net_path = _resolve_frontend_path(str(model_ref), must_exist=True)
+    model_str = str(model_val).strip() if model_val is not None else ""
+    weights: Optional[str] = None
+    from_scratch = False
+    if not model_str or model_str.lower() == "hf":
+        net_ref = DEFAULT_MODEL_CONFIG
+    elif model_str.lower().endswith((".yaml", ".yml")):
+        net_ref = model_str
+        from_scratch = True
+    else:
+        net_ref = DEFAULT_MODEL_CONFIG
+        weights = model_str
+
+    net_path = _resolve_frontend_path(net_ref, must_exist=True)
     net_cfg = load_yaml_config(str(net_path)) or {}
 
-    # Hydra 配置来源: hydra_config 字段 (指向子模块内现成配置, 如官方 roboflow
-    # 参考配置) 或模型配置里平铺的 hydra: 段 (启动时生成进子模块 _custom/)
-    hydra_ref = model_cfg.get("hydra_config") or net_cfg.get("hydra_config")
+    # Hydra 配置来源: 顶层 hydra_config 逃生舱 (--sam3-config) 指向子模块内现成
+    # 配置 (如官方 roboflow 参考配置); 否则用模型配置里平铺的 hydra: 段
+    # (启动时按文本原样生成进子模块 configs/_custom/)
+    hydra_ref = config.get("hydra_config")
     if hydra_ref:
         sam3_config = resolve_hydra_config(str(hydra_ref))
-    elif isinstance(net_cfg.get("hydra"), dict):
-        sam3_config = materialize_hydra_config(net_path, net_cfg)
     else:
-        raise ValueError(
-            f"模型配置 {net_path} 需要以下二者之一:\n"
-            f"  hydra: 段 (完整 Hydra 训练配置的平铺内容, 推荐)\n"
-            f"  hydra_config: 字段 (指向子模块内现成配置, 如官方参考配置)"
-        )
-    # 训练 YAML 的 model.pretrained/resolution 可覆盖模型配置里的同名项
-    # (不能用 dict.get 的默认值或 or: 空字段是 None 需要回落, 而 pretrained=false 是合法值)
-    pretrained = model_cfg.get("pretrained")
-    if pretrained is None:
-        pretrained = net_cfg.get("pretrained")
-    resolution = model_cfg.get("resolution")
-    if resolution is None:
-        resolution = net_cfg.get("resolution")
-    net_overrides = net_cfg.get("overrides") or []
+        sam3_config = materialize_hydra_config(net_path, net_cfg)
+
+    resolution = config.get("resolution")
 
     use_cluster = train_cfg.get("use_cluster")
     partition = train_cfg.get("partition")
@@ -393,8 +397,8 @@ def train(config: Dict) -> None:
             "请确保 sam3 子模块已正确初始化 (git submodule update --init)"
         )
 
-    # ── Hydra overrides: 基础设施 (bpe/output/数据集) → 模型网络配置
-    #    (pretrained/resolution/网络 overrides) → 训练旋钮 → 用户透传 ──
+    # ── Hydra overrides: 基础设施 (bpe/output/数据集) → 预训练权重 (model 字段)
+    #    → resolution/训练旋钮 → 用户透传 ──
     hydra_overrides: List[str] = [
         # bpe_path 在参考配置里是 <BPE_PATH> 占位符, 统一注入绝对路径
         f'paths.bpe_path="{BPE_PATH.as_posix()}"',
@@ -411,11 +415,16 @@ def train(config: Dict) -> None:
     if data_config:
         hydra_overrides += build_dataset_overrides(str(data_config))
 
-    # 模型网络配置自带的网络相关 overrides (优先级最低的网络层覆盖)
-    hydra_overrides += [str(o) for o in net_overrides]
+    # 预训练权重注入 (后端 build_sam3_image_model: checkpoint_path 优先;
+    # 为 None 且 load_from_HF=True 时从 HF 下载; 两者都空 = 从头训练)
+    if from_scratch:
+        hydra_overrides.append("++trainer.model.load_from_HF=false")
+    elif weights:
+        ckpt = _resolve_frontend_path(weights, must_exist=True).as_posix()
+        hydra_overrides.append(f'++trainer.model.checkpoint_path="{ckpt}"')
+    # hf/缺省: 不注入, 后端默认 load_from_HF=True 自动下载 HF 官方权重
 
     hydra_overrides += build_hydra_overrides({
-        "pretrained": pretrained,
         "resolution": resolution,
         "overrides": train_cfg.get("overrides"),
         **{k: train_cfg.get(k) for k in TRAIN_KEY_MAP},
@@ -442,8 +451,16 @@ def train(config: Dict) -> None:
     print(f"\n{'='*60}")
     print("SAM 3 训练")
     print(f"{'='*60}")
-    print(f"模型配置: {model_ref}")
+    if weights:
+        print(f"模型: {weights} (预训练微调)")
+    elif from_scratch:
+        print(f"模型: 从头训练 (无预训练权重)")
+    else:
+        print(f"模型: HF 官方权重 (自动下载, 微调)")
+    print(f"模型配置: {net_ref}")
     print(f"Hydra config: {sam3_config}")
+    if resolution is not None:
+        print(f"分辨率: {resolution}")
     print(f"训练脚本: {train_script}")
     if data_config:
         print(f"数据集配置: {data_config}")
@@ -476,18 +493,17 @@ def main():
         if args.config:
             config = load_yaml_config(args.config)
 
-        # CLI overrides YAML (写入新结构对应的分区)
-        model_cli: Dict[str, Any] = {}
+        # CLI overrides YAML (model/resolution/hydra_config 是顶层标量)
         train_cli: Dict[str, Any] = {}
         data_cli: Dict[str, Any] = {}
         output_cli: Dict[str, Any] = {}
 
-        if args.sam3_config is not None:
-            model_cli["hydra_config"] = args.sam3_config  # 覆盖模型配置里的 hydra_config
-        if args.pretrained is not None:
-            model_cli["pretrained"] = args.pretrained  # 字符串形式在 build 阶段归一化
+        if args.model is not None:
+            config["model"] = args.model
         if args.resolution is not None:
-            model_cli["resolution"] = args.resolution
+            config["resolution"] = args.resolution
+        if args.sam3_config is not None:
+            config["hydra_config"] = args.sam3_config
         if args.data is not None:
             data_cli["config"] = args.data
         if args.output is not None:
@@ -508,8 +524,8 @@ def main():
             train_cli["overrides"] = [*yaml_overrides, *args.override]
 
         # 注意: YAML 里只有注释的分区会被解析成 None, setdefault 不会覆盖 None
-        for section, cli in (("model", model_cli), ("train", train_cli),
-                             ("data", data_cli), ("output", output_cli)):
+        for section, cli in (("train", train_cli), ("data", data_cli),
+                             ("output", output_cli)):
             if cli:
                 if not isinstance(config.get(section), dict):
                     config[section] = {}

@@ -1,19 +1,20 @@
 # SAM 3 训练配置 (Roboflow 官方参考配置复现/对照)
 # 用法: python sam.py configs/train/roboflow_finetune.yaml
 #
-# 注意: 该模型配置的 hydra_config 指向官方参考配置, 数据集路径在
-# sam3/sam3/train/configs/roboflow_v100/ 配置的 paths 段里改,
-# 不支持 configs/datasets/ 注入 (键名不同)
+# 注意: hydra_config 直接指向子模块内官方参考配置 (上游可能更新, 不平铺拷贝),
+# 数据集路径在该配置的 paths 段里改, 不支持 configs/datasets/ 注入 (键名不同)
 #
 # 约定: 下面列出前端支持的全部字段 (均已核实为后端真实存在的键),
 # 默认值与官方参考配置一致; 删掉/留空某字段 = 不修改后端, 用后端原值
 mode: train
 
-model:
-  config: configs/models/sam3_roboflow_ref.yaml   # 模型网络配置 (独立 YAML)
-  hydra_config:         # 临时覆盖模型配置里的 hydra_config, 一般留空
-  pretrained:           # 临时覆盖模型配置里的 pretrained, 一般留空
-  resolution:           # 临时覆盖模型配置里的 resolution, 一般留空
+# 模型: 权重 .pt = 预训练微调 / hf 或删掉 = HF 下载官方权重 / 模型配置 .yaml = 从头训练
+model: pretrain/sam3/sam3.pt
+
+# 逃生舱: 直接使用子模块内官方参考配置 (绕过默认模型配置 configs/models/sam3_image.yaml)
+hydra_config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
+
+resolution: 1008        # 训练分辨率, 336 的倍数
 
 data:
   config:               # 数据集配置 (独立 YAML); 本例用官方参考配置时不支持, 留空

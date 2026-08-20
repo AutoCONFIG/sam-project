@@ -3,28 +3,34 @@
 #
 # 配置按用途分成独立 YAML (参照 yolo-project 的分离模式):
 #   configs/train/xxx.yaml    — 训练入口配置 (本目录), mode: train, 由 sam.py 读取
-#   configs/models/xxx.yaml   — 模型网络配置, 由训练配置的 model.config 引用
+#   configs/models/xxx.yaml   — 模型配置 (hydra: 段平铺完整训练配置), 由训练配置的 model 字段引用
 #   configs/datasets/xxx.yaml — 数据集配置 (COCO 格式), 由训练配置的 data.config 引用
 #   configs/export/xxx.yaml   — ONNX 导出配置, mode: export (独立命令, 见 configs/export/)
 #
 # 训练涉及两层配置:
-#   1. 前端训练配置 (本目录): model / data / train / output 四个分区
+#   1. 前端训练配置 (本目录): model / resolution / data / train / output
 #   2. Hydra 训练配置: 完整的训练参数 (模型结构/transforms/优化器/loss),
 #      完整平铺在模型配置 (configs/models/sam3_image.yaml) 的 hydra: 段里,
 #      启动训练时前端原样生成到子模块 sam3/sam3/train/configs/_custom/
 #      <文件名>.yaml 再传给后端 (Hydra initialize_config_module 要求配置
 #      必须在 sam3.train 包内, 见 sam3/sam3/train/train.py; 生成文件勿手改)
 #
-# 例外: 要直接复用子模块内的现成配置时, 模型配置不写 hydra: 段, 改用
-# hydra_config 字段指向它 (见 configs/models/sam3_roboflow_ref.yaml):
+# model 字段 (标量; 预训练微调不改变网络结构, 指权重即可):
+#   model: pretrain/sam3/sam3.pt           # 权重 .pt = 预训练微调 (默认模型配置 sam3_image.yaml)
+#   model: configs/models/sam3_image.yaml  # 模型配置 .yaml = 从头训练
+#   model: hf                              # 或不写 = HF 自动下载官方权重微调 (gated repo 需 token)
+#
+# 例外 (逃生舱): 要直接复用子模块内的现成配置时, 用顶层 hydra_config 字段
+# (或 CLI --sam3-config) 指向它, 见 configs/train/roboflow_finetune.yaml:
 #   sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml  — Roboflow 100 全量微调
 #   sam3/sam3/train/configs/odinw13/odinw_text_only_train.yaml                  — ODinW-13 文本训练
 #
 # 前端训练配置示例 (分区字段均按 sam3 后端的 Hydra 键翻译):
 #
 # mode: train
-# model:
-#   config: configs/models/sam3_image.yaml   # 模型网络配置 (独立 YAML, 见 configs/models/)
+# model: pretrain/sam3/sam3.pt   # 权重 .pt=微调 / 模型配置 .yaml=从头训练 / hf 或不写=HF 下载微调
+# resolution: 1008               # 训练分辨率, 336 的倍数
+# # hydra_config: sam3/sam3/train/configs/...   # 逃生舱: 直接用子模块内现成配置
 # data:
 #   config: configs/datasets/roboflow_vl_100.yaml   # 数据集配置 (独立 YAML, 见 configs/datasets/)
 # train:
@@ -80,6 +86,7 @@
 #   python sam.py configs/train/<your_config>.yaml
 #
 # CLI 覆盖 (与 YAML 同义, CLI 优先):
+#   python sam.py configs/train/<your_config>.yaml --model pretrain/sam3/sam3.pt --resolution 672
 #   python sam.py configs/train/<your_config>.yaml --num-gpus 8 --batch-size 2
 #   python sam.py configs/train/<your_config>.yaml --data configs/datasets/xxx.yaml
 #   python sam.py configs/train/<your_config>.yaml --sam3-config sam3/sam3/train/configs/my_ft.yaml
@@ -90,8 +97,8 @@
 #   1. 参考配置 submitit.use_cluster 默认 True —— 本地训练必须在前端 YAML 显式 use_cluster: 0
 #   2. 参考配置 trainer.skip_saving_ckpts 默认 true —— 微调前务必用 overrides 改成 false, 否则不存 checkpoint
 #      (configs/models/sam3_image.yaml 的 hydra 段已设为 false)
-#   3. pretrained 不配则默认 load_from_HF=True, 自动从 HuggingFace 下载 sam3 原版权重 (gated repo 需 token),
-#      建议显式指向本地 .pt
+#   3. model 不写或写 hf 则默认 load_from_HF=True, 自动从 HuggingFace 下载 sam3 原版权重
+#      (gated repo 需 token), 建议显式指向本地 .pt
 #   4. 数据格式: COCO (img_folder + _annotations.coco.json), 类别 name 即文本 prompt
 #   5. resolution 修改要求训练镜像模型已支持 (fork 已打通 build_sam3_image_model(image_size=...)),
 #      且只影响 image model; 微调产物用于 sam3.1 multiplex 推理时需注意分辨率一致

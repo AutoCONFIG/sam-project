@@ -1,26 +1,19 @@
-# SAM 3 模型网络配置 (图片模型, 自定义数据微调) — 自包含完整版
+# SAM 3 模型配置 (图片模型, 自定义数据微调) — 自包含完整版
 # ==============================================================
-# 由训练配置 (configs/train/xxx.yaml) 的 model.config 引用:
-#   model:
-#     config: configs/models/sam3_image.yaml
+# 使用方式 (在训练配置 configs/train/xxx.yaml 里):
+#   model: configs/models/sam3_image.yaml   ← 指向本文件 = 从头训练
+#   model: pretrain/sam3/sam3.pt            ← 指向权重 = 预训练微调 (本文件是默认模型配置)
+#   model: hf 或不写                         ← HF 自动下载官方权重微调 (gated repo 需 token)
 #
-# 本文件 = 前端常用项 + hydra: 段完整平铺的完整训练配置 (网络结构/transforms/
-# loss/优化器/分布式等全部在此, 不用去子模块翻后端文件)。启动训练时前端把
-# hydra: 段原样生成到子模块 sam3/sam3/train/configs/_custom/<文件名>.yaml
-# 再传给后端 (Hydra 要求配置必须在 sam3.train 包内, 这步自动生成, 勿手改)。
+# 本文件 = hydra: 段完整平铺的完整训练配置 (网络结构/transforms/loss/优化器/分布式等
+# 全部在此, 不用去子模块翻后端文件)。启动训练时前端把 hydra: 段原样生成到子模块
+# sam3/sam3/train/configs/_custom/<文件名>.yaml 再传给后端 (Hydra 要求配置必须在
+# sam3.train 包内, 这步自动生成, 勿手改)。
 #
-# 字段约定: 删掉/留空 = 不修改后端 (用 hydra 段里的值)
-
-# ── 前端常用项 ──
-pretrained: true        # 预训练权重: true=HF 自动下载 sam3 原版 (gated repo 需 token,
-                        # 建议显式指向本地 .pt) / 路径=指定 ckpt / false=从零训练
-resolution: 1008        # 网络输入分辨率, 必须是 336 的倍数 (336/672/1008/1344...)
-                        # 同步覆盖 hydra 段的 scratch.resolution 与 trainer.model.image_size
-
-# 网络相关的任意 Hydra 覆盖 (原样透传; 同键时训练配置的 train.overrides 优先), 例:
-# overrides:
-#   - trainer.model.enable_segmentation=true   # 开分割分支 (还需 hydra 段 loss 等 3 处联动, 见下文注释)
-overrides: []
+# 数据路径/权重/batch/分辨率/GPU/输出目录等常用项都在训练配置里, 由前端翻译为
+# override 注入; 要改网络/loss/优化器等高级项时直接编辑 hydra: 段,
+# 临时覆盖用训练配置的 train.overrides (如 trainer.model.enable_segmentation=true
+# 开分割分支, 还需 hydra 段里 3 处联动, 见下文注释)。
 
 # ── 完整 Hydra 训练配置 (原样平铺; 生成时自动补 # @package _global_ 头) ──
 hydra:
@@ -186,7 +179,7 @@ hydra:
       stable: False
     scale_by_find_batch_size: True
 
-    resolution: 1008  # 训练分辨率, 336 的倍数 ← 前端 model.resolution 同步改
+    resolution: 1008  # 训练分辨率, 336 的倍数 ← 前端训练配置的 resolution 同步改
     consistent_transform: False
     max_ann_per_img: 200
 
@@ -308,7 +301,7 @@ hydra:
       device: cpus
       eval_mode: false
       enable_segmentation: ${scratch.enable_segmentation}
-      # checkpoint_path / image_size / load_from_HF 由前端 pretrained/resolution 注入 (++ 前缀)
+      # checkpoint_path / load_from_HF / image_size 由前端 model 字段 / resolution 注入 (++ 前缀)
 
     meters:
       val:

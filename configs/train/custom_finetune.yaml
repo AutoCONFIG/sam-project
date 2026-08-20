@@ -1,21 +1,24 @@
-# SAM 3 自定义数据集微调配置 (模型/数据集/训练/输出 分离配置)
+# SAM 3 自定义数据集微调配置 (模型/数据集/训练 分离配置)
 # 用法: python sam.py configs/train/custom_finetune.yaml
 #
 # 配置分离模式 (参照 yolo-project):
-#   configs/train/xxx.yaml    ← 本文件: 训练入口, 引用模型/数据集配置 + 训练旋钮
-#   configs/models/xxx.yaml   ← 模型网络配置 (pretrained/resolution/网络 overrides)
+#   configs/train/xxx.yaml    ← 本文件: 训练入口 (模型/分辨率/数据集/训练旋钮/输出)
+#   configs/models/xxx.yaml   ← 模型配置 (hydra: 段 = 完整平铺的训练配置)
 #   configs/datasets/xxx.yaml ← 数据集配置 (COCO 格式)
 #   configs/export/xxx.yaml   ← ONNX 导出配置 (mode: export, 独立命令)
 #
 # 约定: 下面列出前端支持的全部字段 (均已核实为后端真实存在的键),
-# 默认值与后端模板一致; 删掉/留空某字段 = 不修改后端, 用后端原值
+# 默认值与后端一致; 删掉/留空某字段 = 不修改后端, 用后端原值
 mode: train
 
-model:
-  config: configs/models/sam3_image.yaml   # 模型网络配置 (独立 YAML)
-  hydra_config:         # 临时覆盖模型配置里的 hydra_config, 一般留空
-  pretrained:           # 临时覆盖模型配置里的 pretrained, 一般留空
-  resolution:           # 临时覆盖模型配置里的 resolution, 一般留空
+# 模型: 权重 .pt = 预训练微调 (预训练不改网络结构, 默认模型配置 = configs/models/sam3_image.yaml)
+#       模型配置 .yaml = 从头训练 / hf 或删掉本行 = HF 自动下载官方权重微调 (gated repo 需 token)
+model: pretrain/sam3/sam3.pt
+
+resolution: 1008        # 训练分辨率, 336 的倍数 → scratch.resolution + trainer.model.image_size
+
+# 逃生舱: 直接使用子模块内的现成 Hydra 配置 (绕过模型配置的 hydra 段), 如官方参考配置
+# hydra_config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
 
 data:
   config: configs/datasets/roboflow_vl_100.yaml   # 数据集配置 (独立 YAML)
