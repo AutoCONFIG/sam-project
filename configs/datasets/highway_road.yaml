@@ -1,0 +1,18 @@
+# SAM 3 数据集配置: highway_road 高速道路场景分割
+# ==================================================
+# 由 tools/yolo_seg_to_coco.py 从 YOLO 分割格式转换而来 (1571 train / 177 valid)
+# 8 类 (类别名即 SAM3 文本 prompt, 已从 YOLO 标识符改为自然短语):
+#   highway up direction, highway down direction, emergency lane, highway ramp,
+#   highway escape ramp, ramp guiding area, road isolation zone, guardrail
+# 用法: 训练入口配置里 data.config 指向本文件
+#
+# 注: 类别多为道路区域 (stuff 类), 若需 mask 输出需开启分割训练
+#     (见 configs/train/template_image.yaml 中 custom_data 末尾的 4 处联动说明)
+
+path: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/datasets/seg/highway_road_coco
+
+train: train
+val: valid
+ann_file: _annotations.coco.json
+
+num_images: null                 # 限制训练图片数 (debug 用); null = 全部
