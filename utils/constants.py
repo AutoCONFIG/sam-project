@@ -35,6 +35,13 @@ DEFAULT_USE_FA3: Final[bool] = False
 DEFAULT_USE_ROPE_REAL: Final[bool] = True
 DEFAULT_COMPILE: Final[bool] = False
 
+# sam3.1 (multiplex) 专用: 一个 session 最多同时跟踪的对象数 (超出丢弃并告警
+# "hitting tracking_obj.max_num_objects"); 运行时上限, 可自由调大 (显存随之涨)
+DEFAULT_MAX_NUM_OBJECTS: Final[int] = 16
+# sam3.1 专用: 每个 multiplex 桶的对象容量 — 结构参数! 已固化进 checkpoint
+# 权重形状 (预训练=16), 改它会与预训练权重 size mismatch 崩溃; 仅自训模型可改
+DEFAULT_MULTIPLEX_COUNT: Final[int] = 16
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Prompt defaults
 # ═══════════════════════════════════════════════════════════════════════════════

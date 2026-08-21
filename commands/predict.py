@@ -35,7 +35,7 @@ from core.io_dispatch import (
     resolve_output_tree,
 )
 from core.labels import LabelExporter
-from core.visualization import draw_mask_overlay
+from core.visualization import build_class_colors, draw_mask_overlay
 from utils.config import (
     config_from_args,
     get_nested_value,
@@ -50,7 +50,9 @@ from utils.constants import (
     DEFAULT_FRAME_INDEX,
     DEFAULT_IMAGE_SIZE,
     DEFAULT_LABEL_FORMATS,
+    DEFAULT_MAX_NUM_OBJECTS,
     DEFAULT_MODEL_VERSION,
+    DEFAULT_MULTIPLEX_COUNT,
     DEFAULT_PREDICT_OUTPUT,
     DEFAULT_SAVE_LABELS,
     DEFAULT_SAVE_MASKS,
@@ -98,6 +100,10 @@ Examples:
                         help="添加文本提示的帧索引 (默认 0)")
     parser.add_argument("--image-size", type=int, default=None,
                         help=f"推理分辨率, 须为 {IMAGE_SIZE_STEP} 的倍数; 16G 显存用 672 (默认 {DEFAULT_IMAGE_SIZE})")
+    parser.add_argument("--max-num-objects", type=int, default=None,
+                        help=f"单 session 最多同时跟踪对象数 (仅 sam3.1, 默认 {DEFAULT_MAX_NUM_OBJECTS}; 多目标场景可调大, 显存随之涨)")
+    parser.add_argument("--multiplex-count", type=int, default=None,
+                        help=f"每个 multiplex 桶的对象容量 (仅 sam3.1, 默认 {DEFAULT_MULTIPLEX_COUNT}; 结构参数, 与预训练权重绑定, 勿改)")
 
     set_boolean_argument(parser, "use_fa3", "use-fa3",
                          help_true="使用 Flash Attention 3 (需安装 flash-attn)",
@@ -134,7 +140,8 @@ def args_to_config(args: argparse.Namespace) -> Dict[str, Any]:
 
     model_cfg = config_from_args(
         args,
-        plain=("version", "checkpoint", "image_size", "frame_index", "finetune_ckpt"),
+        plain=("version", "checkpoint", "image_size", "frame_index", "finetune_ckpt",
+               "max_num_objects", "multiplex_count"),
         boolean=("use_fa3", "use_rope_real", "compile"),
     )
     if model_cfg:
@@ -173,6 +180,8 @@ def predict(config: Dict) -> None:
     use_fa3 = get_nested_value(config, "model", "use_fa3", default=DEFAULT_USE_FA3)
     use_rope_real = get_nested_value(config, "model", "use_rope_real", default=DEFAULT_USE_ROPE_REAL)
     compile_model = get_nested_value(config, "model", "compile", default=DEFAULT_COMPILE)
+    max_num_objects = get_nested_value(config, "model", "max_num_objects", default=DEFAULT_MAX_NUM_OBJECTS)
+    multiplex_count = get_nested_value(config, "model", "multiplex_count", default=DEFAULT_MULTIPLEX_COUNT)
 
     input_path = get_nested_value(config, "io", "input")
     output_path = get_nested_value(config, "io", "output", default=DEFAULT_PREDICT_OUTPUT)
@@ -251,6 +260,8 @@ def predict(config: Dict) -> None:
         use_rope_real=use_rope_real,
         compile=compile_model,
         finetune_ckpt=finetune_ckpt,
+        max_num_objects=max_num_objects,
+        multiplex_count=multiplex_count,
     )
     print(f"模型构建完成\n")
 
@@ -367,6 +378,7 @@ def process_unit(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # ── Write per-frame outputs ─────────────────────────────────────────
+    class_colors = build_class_colors(classes)  # 每类一色, 全程稳定
     vis_frames: List[np.ndarray] = []
     mask_frames: List[np.ndarray] = []
     total = 0
@@ -418,9 +430,9 @@ def process_unit(
             else:
                 cv2.imwrite(str(tree.masks / f"{fi:06d}.png"), mask_img)
 
-        # vis image
+        # vis image (按类别着色, 只画分割结果)
         if save_vis:
-            vis = draw_mask_overlay(frame_rgb, obj_ids, masks, probs, boxes)
+            vis = draw_mask_overlay(frame_rgb, masks, cls_names, class_colors)
             if unit.kind == "video":
                 vis_frames.append(vis)
             else:

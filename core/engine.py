@@ -36,6 +36,8 @@ from utils.constants import (
     DEFAULT_USE_ROPE_REAL,
     DEFAULT_COMPILE,
     DEFAULT_MODEL_VERSION,
+    DEFAULT_MAX_NUM_OBJECTS,
+    DEFAULT_MULTIPLEX_COUNT,
     IMAGE_EXT,
 )
 
@@ -69,6 +71,14 @@ class Sam3VideoPredictor:
         Only supported for ``sam3.1``. The training resolution should match
         ``image_size`` (RoPE buffers are always taken from the built model,
         never from the checkpoint).
+    max_num_objects : int
+        Max simultaneously tracked objects per session (``sam3.1`` only).
+        Excess detections are dropped with a "hitting max_num_objects"
+        warning. Default 16; raise for crowded scenes (VRAM grows with it).
+    multiplex_count : int
+        Objects per multiplex bucket (``sam3.1`` only). STRUCTURAL: baked
+        into checkpoint weight shapes (pretrained = 16); changing it with
+        pretrained weights crashes with size mismatch. Default 16.
     """
 
     def __init__(
@@ -80,6 +90,8 @@ class Sam3VideoPredictor:
         use_rope_real: bool = DEFAULT_USE_ROPE_REAL,
         compile: bool = DEFAULT_COMPILE,
         finetune_ckpt: Optional[str] = None,
+        max_num_objects: int = DEFAULT_MAX_NUM_OBJECTS,
+        multiplex_count: int = DEFAULT_MULTIPLEX_COUNT,
     ):
         from sam3.model_builder import build_sam3_predictor
 
@@ -92,9 +104,11 @@ class Sam3VideoPredictor:
             warm_up=compile,
         )
         if version == "sam3.1":
-            # image_size 参数化仅 sam3.1 (multiplex) 支持; sam3 原版的
-            # Sam3VideoPredictor.__init__ 不接受该参数, 传入会 TypeError
+            # image_size/max_num_objects/multiplex_count 仅 sam3.1 (multiplex)
+            # 支持; sam3 原版 builder 不接受这些参数, 传入会 TypeError
             build_kwargs["image_size"] = image_size
+            build_kwargs["max_num_objects"] = max_num_objects
+            build_kwargs["multiplex_count"] = multiplex_count
         self._predictor = build_sam3_predictor(**build_kwargs)
         if finetune_ckpt:
             self._load_finetune_ckpt(finetune_ckpt, version)

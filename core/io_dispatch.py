@@ -1,9 +1,10 @@
 """Input discovery and output tree mirroring for prediction.
 
 Scans an input path into processing units (each a video file or an image
-sequence), then maps each unit to a mirrored output directory tree so that
-the output structure mirrors the input: a video in yields a video out, an
-image directory yields a parallel image directory.
+sequence). Outputs are grouped by form at the top level (vis/ masks/
+masks_npz/ labels/), each mirroring the input's relative subdirectory
+structure underneath: a video in yields a video out, an image directory
+yields a parallel image directory.
 """
 
 from __future__ import annotations
@@ -36,11 +37,11 @@ class OutputTree:
     """Mirrored output directories for one input unit."""
 
     unit: InputUnit
-    base: Path  # <output_root>/<rel_dir>
-    vis: Path  # <base>/vis
-    masks: Path  # <base>/masks
-    npz: Path  # <base>/masks_npz
-    labels: Path  # <base>/labels
+    base: Path  # <output_root> (产物按形态分顶层目录, 见 resolve_output_tree)
+    vis: Path  # <output_root>/vis/<rel_dir>
+    masks: Path  # <output_root>/masks/<rel_dir>
+    npz: Path  # <output_root>/masks_npz/<rel_dir>
+    labels: Path  # <output_root>/labels/<rel_dir>
     # output filename stem (video name or image-seq folder name)
     stem: str
 
@@ -111,23 +112,26 @@ def _rel_dir(path: Path, root: Path) -> str:
 def resolve_output_tree(output_root: str, unit: InputUnit) -> OutputTree:
     """Build the mirrored output directory tree for one input unit.
 
-    Layout under ``<output_root>/<rel_dir>/``:
-        vis/       — visualization (mp4 for video, jpg for image_seq)
-        masks/     — mask images (mp4 for video, png for image_seq)
-        masks_npz/ — raw mask data (npz per frame, always)
-        labels/    — coco.json + yolo/ for this unit
+    Layout: 产物形态为顶层目录, 下挂输入单元的原始相对子路径
+    (``rel_dir`` 为空时直接挂在形态目录下)::
+
+        <output_root>/
+            vis/<rel_dir>/       — visualization (mp4 for video, jpg for image_seq)
+            masks/<rel_dir>/     — mask images (mp4 for video, png for image_seq)
+            masks_npz/<rel_dir>/ — raw mask data (npz per frame, always)
+            labels/<rel_dir>/    — coco.json + yolo/ for this unit
     """
     root = Path(output_root)
-    base = root / unit.rel_dir if unit.rel_dir else root
+    rel = Path(unit.rel_dir) if unit.rel_dir else Path()
     stem = unit.stem if unit.kind == "video" else unit.source.name
 
     tree = OutputTree(
         unit=unit,
-        base=base,
-        vis=base / "vis",
-        masks=base / "masks",
-        npz=base / "masks_npz",
-        labels=base / "labels",
+        base=root,
+        vis=root / "vis" / rel,
+        masks=root / "masks" / rel,
+        npz=root / "masks_npz" / rel,
+        labels=root / "labels" / rel,
         stem=stem,
     )
     for d in (tree.vis, tree.masks, tree.npz, tree.labels):
