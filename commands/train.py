@@ -376,6 +376,13 @@ def build_hydra_overrides(knobs: Dict[str, Any]) -> List[str]:
             value = str(value).lower()
         overrides.append(f"{hydra_key}={value}")
 
+    # freeze 是 pattern 列表 (trainer.freeze 为 list 键, 走不了上面的标量映射):
+    # unix fnmatch 匹配参数名, 真冻结 (requires_grad=False, 不进优化器/DDP 不同步)
+    freeze = knobs.get("freeze")
+    if freeze is not None:
+        pats = ",".join(f"'{p}'" for p in freeze)
+        overrides.append(f"trainer.freeze=[{pats}]")
+
     return _dedupe_overrides(overrides)
 
 
@@ -476,6 +483,7 @@ def train(config: Dict) -> None:
 
     hydra_overrides += build_hydra_overrides({
         "resolution": resolution,
+        "freeze": train_cfg.get("freeze"),
         **{k: train_cfg.get(k) for k in TRAIN_KEY_MAP},
     })
     hydra_overrides = _dedupe_overrides(hydra_overrides)

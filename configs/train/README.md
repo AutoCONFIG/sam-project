@@ -5,6 +5,8 @@
 #   configs/train/xxx.yaml            — 训练入口配置 (本目录), mode: train, 由 sam.py 读取
 #   configs/train/template_image.yaml — 训练模板: 训练超参数全集 (transforms/loss/优化器
 #                                       /调度器/评测/分布式默认值), 由入口配置的 template 字段引用
+#   configs/train/template_image_seg.yaml — 分割训练模板 (上述模板的分割变体, 已开启
+#                                       mask loss; 数据集 COCO json 需带 segmentation)
 #   configs/models/xxx.yaml           — 模型配置 (只定义模型构建 trainer.model; 网络结构在
 #                                       后端代码 build_sam3_image_model 里), 由 model 字段引用
 #   configs/datasets/xxx.yaml         — 数据集配置 (COCO 格式), 由训练配置的 data.config 引用
@@ -69,6 +71,10 @@
 #   val_batch: 1            # → scratch.val_batch_size
 #   early_stop: false       # → trainer.early_stop.enabled (按验证次数计)
 #   early_stop_patience: 5  # → trainer.early_stop.patience
+#   # 参数冻结
+#   freeze:                 # → trainer.freeze (unix pattern 列表, 匹配参数名; 真冻结
+#     - backbone.vision_backbone.*    #   requires_grad=False, 比 lr=0 省算力;
+#     - backbone.language_backbone.*  #   例: 冻结图像+文本编码器只训 transformer; 删掉或 []=全量微调)
 #   # 损失权重 / 匹配器成本 (默认=官方值, 一般不用动; 源在 custom_data.loss / scratch.matcher)
 #   loss_bbox: 5.0          # 框 L1 损失权重 (loss_fns_find.0=Boxes)
 #   loss_giou: 2.0          # 框 GIoU 损失权重 (小目标多可适当抬高)
