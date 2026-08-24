@@ -20,6 +20,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
 # Windows 终端编码修复
 if sys.platform == 'win32':
     import io
@@ -807,6 +812,20 @@ def copy_file_safe(src_path, dst_path):
         return False
 
 
+def progress_iter(iterable, desc, total):
+    """有 tqdm 时显示进度条，否则每完成约 10% 打印一行进度。"""
+    if tqdm is not None:
+        yield from tqdm(iterable, desc=desc, total=total, ncols=100)
+        return
+    step = max(total // 10, 1)
+    count = 0
+    for item in iterable:
+        yield item
+        count += 1
+        if count % step == 0 or count == total:
+            print(f"    {desc}: {count}/{total} ({count * 100 // total}%)")
+
+
 def process_dataset(ann_file, img_prefix, dataset_name, certain_base, weak_base, uncertain_base, dataset_flag=9):
     """处理单个标注文件
 
@@ -889,7 +908,7 @@ def process_dataset(ann_file, img_prefix, dataset_name, certain_base, weak_base,
     uncertain_image_ids = set()
     stats = {'deleted': 0, 'skipped': skipped_count, 'certain': 0, 'weak': 0, 'uncertain': 0, 'fused': 0, 'overlap_px': 0, 'restored': 0}
 
-    for img_id, img_annotations in annotations_by_image.items():
+    for img_id, img_annotations in progress_iter(annotations_by_image.items(), "分类+融合", len(annotations_by_image)):
         img_info = images_dict.get(img_id, {})
         img_width = img_info.get('width', 1280)
         img_height = img_info.get('height', 720)
@@ -1012,7 +1031,7 @@ def process_dataset(ann_file, img_prefix, dataset_name, certain_base, weak_base,
     uncertain_images = []
     copied_count = 0
 
-    for img in data['images']:
+    for img in progress_iter(data['images'], "复制/链接图片", len(data['images'])):
         img_id = img['id']
         file_name = '/'.join(p.strip() for p in img['file_name'].split('/'))
 
@@ -1181,7 +1200,7 @@ def main():
     print(f"不确定分类输出: {uncertain_base}")
     print("=" * 60)
 
-    for config in DATASET_CONFIGS:
+    for config_idx, config in enumerate(DATASET_CONFIGS, 1):
         if len(config) == 4:
             ann_file, img_prefix, dataset_name, dataset_flag = config
         elif len(config) == 3:
@@ -1198,7 +1217,7 @@ def main():
                 dataset_name = img_prefix_path.name
             dataset_flag = 9  # 默认flag
 
-        print(f"\n处理: {ann_file}")
+        print(f"\n[{config_idx}/{len(DATASET_CONFIGS)}] 处理: {ann_file}")
         print(f"  图片路径: {img_prefix}")
         print(f"  数据集名: {dataset_name}")
         print(f"  dataset_flag: {dataset_flag}")
