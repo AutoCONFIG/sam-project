@@ -8,6 +8,7 @@
 支持Linux(软链接)和Windows(复制)
 """
 
+import argparse
 import json
 import math
 import os
@@ -150,6 +151,8 @@ DATASET_CONFIGS = [
      "snap_picture", 9),
 ]
 
+# 默认输出目录(相对当前工作目录)，可用命令行参数 -o/--output 覆盖，
+# 指定后在其下创建 certain/weak/uncertain 三个子目录
 CERTAIN_OUTPUT_BASE = "highway_seg_merged/certain"
 WEAK_OUTPUT_BASE = "highway_seg_merged/weak"
 UNCERTAIN_OUTPUT_BASE = "highway_seg_merged/uncertain"
@@ -1136,9 +1139,22 @@ def process_dataset(ann_file, img_prefix, dataset_name, certain_base, weak_base,
 
 
 def main():
-    certain_base = Path(CERTAIN_OUTPUT_BASE)
-    weak_base = Path(WEAK_OUTPUT_BASE)
-    uncertain_base = Path(UNCERTAIN_OUTPUT_BASE)
+    parser = argparse.ArgumentParser(
+        description="8分类合并为3分类，并融合同类别相接的分割区域(只截断不删除，输出互不重叠)")
+    parser.add_argument('-o', '--output', default=None,
+                        help='输出根目录，其下创建 certain/weak/uncertain 子目录 '
+                             '(默认: highway_seg_merged，即脚本顶部 *_OUTPUT_BASE 常量)')
+    args = parser.parse_args()
+
+    if args.output:
+        output_base = Path(args.output)
+        certain_base = output_base / 'certain'
+        weak_base = output_base / 'weak'
+        uncertain_base = output_base / 'uncertain'
+    else:
+        certain_base = Path(CERTAIN_OUTPUT_BASE)
+        weak_base = Path(WEAK_OUTPUT_BASE)
+        uncertain_base = Path(UNCERTAIN_OUTPUT_BASE)
 
     # 输入路径只读保护: 输出目录不允许落在输入数据目录内，
     # 脚本对输入只做读取(标注JSON只读打开, 图片仅作复制/软链接源)
