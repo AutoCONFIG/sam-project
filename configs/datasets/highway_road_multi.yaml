@@ -1,0 +1,108 @@
+# SAM 3 多数据集训练配置: highway_road 全量子数据集拼接 (ConcatSam3Datasets)
+# ============================================================================
+# 把 yolo_seg_to_coco.py 批量转换出的 17 个子数据集一把全训: 前端 commands/train.py
+# 检测到顶层 datasets: 列表时, 生成 ConcatSam3Datasets(datasets=[Sam3ImageDataset, ...])
+# 块拼进训练模板 (而非 CLI scalar override, 后者无法表达 list-of-dicts)。
+#
+# 格式: 顶层 datasets: 列表, 每条描述一个 Roboflow COCO 布局的子数据集:
+#   <path>/<train>/_annotations.coco.json
+#   <path>/<valid>/_annotations.coco.json
+#
+# limit_ratio: 按比例使用该子数据集的图片 (0-1, 默认 1 = 全用)。在数据集内部读标注
+#   后 seeded shuffle + slice (与 limit_ids 机制一致, 可叠加)。想抽样某子集时改小,
+#   例如 0.5 = 随机取一半。默认全用, 生成数据即全部参与训练。
+#
+# 注: 多数据集时 meters 段的 gt_path (验证评测 GT) 只指向第一个子数据集的 val 标注
+#   (best-effort; 多数据集完整评测需后端改造)。训练数据本身是全部子集拼接。
+#
+# 路径: yolo_seg_to_coco.py 的 OUTPUT_ROOT (= /data2/kaiyun/datasets_seg/yolo_format_coco)
+#   下按子数据集名建 {train,valid}/_annotations.coco.json。请按服务器实际目录核对/增删。
+
+datasets:
+  # --- 有子目录的源数据集 (DATA_BASE = /data/kaiyun/ding/datasets) ---
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/2501234348_1
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/task1_task-1
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/task1_train
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/task1_场景1
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/task1_场景2
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/task1_train_day
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/task1_train_night
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/湖南
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/淄博
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/zibo_2
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/103路采样+96路采样
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/桂三20260204
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/违法停车
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  # --- 无子目录的源数据集 (DATA_BASE_KAIYUN = /data2/kaiyun/datasets_seg) ---
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/重庆20260226
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/沪武
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/宁沪-无锡高速大脑
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0
+  - path: /data2/kaiyun/datasets_seg/yolo_format_coco/snap_picture
+    train: train
+    val: valid
+    ann_file: _annotations.coco.json
+    limit_ratio: 1.0

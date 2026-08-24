@@ -241,7 +241,12 @@ def _extract_hydra_lines(path: Path) -> List[str]:
     return body
 
 
-def materialize_hydra_config(tpl_path: Path, net_path: Path, net_cfg: Dict[str, Any]) -> str:
+def materialize_hydra_config(
+    tpl_path: Path,
+    net_path: Path,
+    net_cfg: Dict[str, Any],
+    dataset_blocks: Optional[Dict[str, List[str]]] = None,
+) -> str:
     """把训练模板 (configs/train/template_image.yaml) 与模型配置
     (configs/models/xxx.yaml) 的 ``trainer.model`` 段做文本合并, 落到子模块
     ``sam3/sam3/train/configs/_custom/<模板文件名>.yaml``, 返回 Hydra config 名。
@@ -249,7 +254,9 @@ def materialize_hydra_config(tpl_path: Path, net_path: Path, net_cfg: Dict[str, 
     Hydra initialize_config_module 要求配置必须在 sam3.train 模块内, 所以平铺在
     前端的完整训练配置要生成进子模块才能被后端加载。按文本原样搬运 (不经 YAML
     序列化往返), ``${...}`` 插值与注释完全保真; 内容不变时不重写, 避免无意义的
-    mtime 变化。模板里的 ``__MODEL_BLOCK__`` 占位行被替换为模型配置的 model 段。
+    mtime 变化。模板里的 ``__MODEL_BLOCK__`` 占位行被替换为模型配置的 model 段;
+    ``__TRAIN_DATASET_BLOCK__`` / ``__VAL_DATASET_BLOCK__`` 占位行 (多数据集时)
+    被替换为 ConcatSam3Datasets 拼接块 (单数据集时不传, 模板默认块原样保留)。
     """
     if not isinstance(net_cfg.get("hydra"), dict) \
             or not isinstance(net_cfg["hydra"].get("trainer"), dict) \
@@ -281,6 +288,30 @@ def materialize_hydra_config(tpl_path: Path, net_path: Path, net_cfg: Dict[str, 
         raise ValueError(f"训练模板缺少 __MODEL_BLOCK__ 占位行: {tpl_path}") from None
     # 提取后文本里 trainer 的子键在 2 空格缩进, model 段文本缩进正好匹配, 直接拼接
     body = tpl_lines[:slot] + block + tpl_lines[slot + 1:]
+
+    # ── 多数据集: __TRAIN_DATASET_BLOCK__ / __VAL_DATASET_BLOCK__ 占位替换 ──
+    #   dataset_blocks 形如 {"train": [yaml 行...], "val": [yaml 行...]}
+    #   (commands/train.py build_dataset_blocks 生成, 已含正确缩进)。单数据集时不
+    #   传, 模板里默认的单 Sam3ImageDataset 块原样保留 → 行为零变化。
+    if dataset_blocks:
+        for marker, ds_block in dataset_blocks.items():
+            tag = f"__{marker.upper()}_DATASET_BLOCK__"
+            tag_end = f"__{marker.upper()}_DATASET_BLOCK_END__"
+            start_idx = next(
+                (i for i, line in enumerate(body) if tag in line), None)
+            if start_idx is None:
+                raise ValueError(
+                    f"训练模板缺少 {tag} 占位行: {tpl_path}")
+            end_idx = next(
+                (i for i in range(start_idx + 1, len(body))
+                 if tag_end in body[i]),
+                None)
+            if end_idx is None:
+                raise ValueError(
+                    f"训练模板缺少 {tag_end} 占位行: {tpl_path}")
+            # 占位块内 (含两个标记行) 整体替换为生成的 yaml 块
+            body = body[:start_idx] + ds_block + body[end_idx + 1:]
+
     text = "# @package _global_\n" + "\n".join(body).strip("\n") + "\n"
 
     custom_dir = HYDRA_CONFIG_ROOT / "configs" / "_custom"
@@ -313,24 +344,51 @@ def _normalize_gpu_ids(value: Any) -> Optional[List[int]]:
     return [int(x) for x in str(value).split(",") if x.strip()]
 
 
+def _resolve_dataset_entry(entry: Dict[str, Any], ds_path: Path) -> Dict[str, str]:
+    """单条数据集描述 (path/train/val/ann_file/limit_ratio/num_images) → 标准化字段。
+
+    多数据集 yaml 里 ``datasets:`` 列表的一项, 或单数据集 yaml 的顶层。返回的字段
+    都是绝对/正斜杠路径, 供 Hydra override 或 yaml 块拼接直接使用。
+    """
+    root = entry.get("path")
+    if not root:
+        raise ValueError(f"数据集配置缺少 path 字段: {ds_path}")
+    root = _resolve_frontend_path(str(root), must_exist=True).as_posix()
+    train_sub = str(entry.get("train") or _DEFAULT_TRAIN_SUBDIR).strip("/")
+    val_sub = str(entry.get("val") or _DEFAULT_VAL_SUBDIR).strip("/")
+    ann_file = str(entry.get("ann_file") or _DEFAULT_ANN_FILE)
+    limit_ratio = entry.get("limit_ratio")
+    if limit_ratio is not None:
+        limit_ratio = float(limit_ratio)
+        if not (0.0 < limit_ratio <= 1.0):
+            raise ValueError(
+                f"limit_ratio 必须在 (0, 1] 范围, 得到 {limit_ratio} ({ds_path})")
+    return {
+        "root": root,
+        "train_sub": train_sub,
+        "val_sub": val_sub,
+        "ann_file": ann_file,
+        "limit_ratio": limit_ratio,
+        "num_images": entry.get("num_images"),
+    }
+
+
 def build_dataset_overrides(data_config_value: str) -> List[str]:
     """把独立的数据集 YAML (configs/datasets/xxx.yaml) 翻译为 Hydra overrides。
 
-    覆盖的都是标准键 (训练模板 template_image.yaml 与后端 roboflow 参考配置
-    共有的 Sam3ImageDataset 键), 用 ``=``; paths.dataset_root 只有模板里有。
+    单数据集格式 (顶层 path/train/val/ann_file) → 返回 scalar overrides, 行为与
+    历史一致。多数据集格式 (顶层 ``datasets:`` 列表) → 返回空列表 (改由
+    build_dataset_blocks 生成 yaml 块拼进模板, CLI override 无法表达 list-of-dicts)。
     """
     ds_path = _resolve_frontend_path(data_config_value, must_exist=True)
     ds = load_yaml_config(str(ds_path)) or {}
 
-    root = ds.get("path")
-    if not root:
-        raise ValueError(f"数据集配置缺少 path 字段: {ds_path}")
-    root = _resolve_frontend_path(str(root), must_exist=True).as_posix()
+    if ds.get("datasets"):  # 多数据集 → 走 yaml 块, 不发 scalar override
+        return []
 
-    train_sub = str(ds.get("train") or _DEFAULT_TRAIN_SUBDIR).strip("/")
-    val_sub = str(ds.get("val") or _DEFAULT_VAL_SUBDIR).strip("/")
-    ann_file = str(ds.get("ann_file") or _DEFAULT_ANN_FILE)
-
+    f = _resolve_dataset_entry(ds, ds_path)
+    root, train_sub, val_sub, ann_file = (
+        f["root"], f["train_sub"], f["val_sub"], f["ann_file"])
     overrides = [
         f'paths.dataset_root="{root}"',
         f'trainer.data.train.dataset.img_folder="{root}/{train_sub}/"',
@@ -340,10 +398,118 @@ def build_dataset_overrides(data_config_value: str) -> List[str]:
         # 验证集 COCO 评测的 GT 路径 (模板里是插值, 子目录非默认时会断, 统一覆盖)
         f'trainer.meters.val.custom.detection.pred_file_evaluators.0.gt_path="{root}/{val_sub}/{ann_file}"',
     ]
-    if ds.get("num_images") is not None:
+    if f["num_images"] is not None:
         # 两个配置的 limit_ids 键都存在 (值各自插值到 num_images), 直接覆盖
-        overrides.append(f"trainer.data.train.dataset.limit_ids={int(ds['num_images'])}")
+        overrides.append(f"trainer.data.train.dataset.limit_ids={int(f['num_images'])}")
     return overrides
+
+
+# 多数据集 yaml 块: 每个 Sam3ImageDataset 子项共享的字段 (与模板默认块一致)。
+#   值为 str → ``key: value``; 为 dict → 展开为嵌套块 (key: / 子键)。
+_CONCAT_TRAIN_DS_FIELDS: Dict[str, Any] = {
+    "transforms": "${custom_data.train_transforms}",
+    "load_segmentation": "${scratch.enable_segmentation}",
+    "max_ann_per_img": 500000,
+    "multiplier": 1,
+    "max_train_queries": 50000,
+    "max_val_queries": 50000,
+    "training": "true",
+    "use_caching": "False",
+}
+_CONCAT_VAL_DS_FIELDS: Dict[str, Any] = {
+    "load_segmentation": "${scratch.enable_segmentation}",
+    "coco_json_loader": {
+        "_target_": "sam3.train.data.coco_json_loaders.COCO_FROM_JSON",
+        "include_negatives": "true",
+        "category_chunk_size": 2,
+        "_partial_": "true",
+    },
+    "transforms": "${custom_data.val_transforms}",
+    "max_ann_per_img": 100000,
+    "multiplier": 1,
+    "training": "false",
+}
+
+
+def _emit_sam3_dataset_yaml(
+    fields: Dict[str, Any],
+    img_folder: str,
+    ann_file: str,
+    limit_ratio: Optional[float],
+    indent: str,
+) -> List[str]:
+    """生成一个 Sam3ImageDataset 子项的 yaml 行 (list item, 以 ``- `` 开头)。
+
+    ``indent`` 是 list item ``-`` 所在列; 子键比它多 2 空格。字段值为 dict 时展开
+    为嵌套块 (``key:`` + 缩进 2 的子键), 与模板默认 val 块的 coco_json_loader 一致。
+    """
+    lines = [f"{indent}- _target_: sam3.train.data.sam3_image_dataset.Sam3ImageDataset"]
+    child = indent + "  "  # list item 子键比 ``-`` 多 2 空格
+    grandchild = child + "  "  # 嵌套块的子键再 +2
+    for k, v in fields.items():
+        if isinstance(v, dict):
+            lines.append(f"{child}{k}:")
+            for sk, sv in v.items():
+                lines.append(f"{grandchild}{sk}: {sv}")
+        else:
+            lines.append(f"{child}{k}: {v}")
+    lines.append(f"{child}img_folder: {img_folder}")
+    lines.append(f"{child}ann_file: {ann_file}")
+    if limit_ratio is not None and limit_ratio < 1.0:
+        lines.append(f"{child}limit_ratio: {limit_ratio}")
+    return lines
+
+
+def build_dataset_blocks(
+    data_config_value: str,
+) -> Optional[Dict[str, List[str]]]:
+    """多数据集 yaml (顶层 ``datasets:`` 列表) → ConcatSam3Datasets 的 yaml 块文本。
+
+    返回 ``{"train": [yaml 行...], "val": [yaml 行...]}`` (行已含模板要求的缩进,
+    供 materialize_hydra_config 替换 __TRAIN/VAL_DATASET_BLOCK__ 占位)。单数据集
+    yaml 返回 None (走 build_dataset_overrides 的 scalar override 路径)。
+    """
+    ds_path = _resolve_frontend_path(data_config_value, must_exist=True)
+    ds = load_yaml_config(str(ds_path)) or {}
+    entries = ds.get("datasets")
+    if not entries:
+        return None
+
+    resolved = [_resolve_dataset_entry(e, ds_path) for e in entries]
+
+    # ── train 块: dataset: ConcatSam3Datasets(datasets=[Sam3ImageDataset, ...]) ──
+    #   缩进对齐模板 (提取后, 已去 hydra: 的 2 空格): dataset: 在 6 空格, 其子键 8
+    #   空格, list item ``-`` 在 8 空格 (与 datasets: 同级)。
+    train_lines = [
+        "      dataset:",
+        "        _target_: sam3.train.data.sam3_image_dataset.ConcatSam3Datasets",
+        "        datasets:",
+    ]
+    for f in resolved:
+        train_lines += _emit_sam3_dataset_yaml(
+            _CONCAT_TRAIN_DS_FIELDS,
+            img_folder=f"{f['root']}/{f['train_sub']}/",
+            ann_file=f"{f['root']}/{f['train_sub']}/{f['ann_file']}",
+            limit_ratio=f["limit_ratio"],
+            indent="        ",  # list item 与 datasets: 同级 (8 空格)
+        )
+
+    # ── val 块: 同结构, 但字段用 val 配置 ──
+    val_lines = [
+        "      dataset:",
+        "        _target_: sam3.train.data.sam3_image_dataset.ConcatSam3Datasets",
+        "        datasets:",
+    ]
+    for f in resolved:
+        val_lines += _emit_sam3_dataset_yaml(
+            _CONCAT_VAL_DS_FIELDS,
+            img_folder=f"{f['root']}/{f['val_sub']}/",
+            ann_file=f"{f['root']}/{f['val_sub']}/{f['ann_file']}",
+            limit_ratio=f["limit_ratio"],
+            indent="        ",
+        )
+
+    return {"train": train_lines, "val": val_lines}
 
 
 def build_hydra_overrides(knobs: Dict[str, Any]) -> List[str]:
@@ -429,12 +595,21 @@ def train(config: Dict) -> None:
     # 生成进子模块 configs/_custom/
     hydra_ref = config.get("hydra_config")
     tpl_ref: Optional[str] = None
+    # 多数据集: 若 data.config 指向的 yaml 是 datasets: 列表, 生成 ConcatSam3Datasets
+    # 块拼进模板 (而非 CLI scalar override); 仅用模板路径时才支持 (hydra_config 逃生
+    # 舱指向现成配置时不走文本拼接, 多数据集需另配)。单数据集 yaml → build_dataset_blocks
+    # 返回 None, 走 build_dataset_overrides 的 scalar override 路径 (向后兼容)。
+    dataset_blocks: Optional[Dict[str, List[str]]] = None
+    data_config = data_cfg.get("config")
+    if not hydra_ref and data_config:
+        dataset_blocks = build_dataset_blocks(str(data_config))  # None=单数据集; 多数据集路径不存在会抛错 (应失败, 不静默回退)
     if hydra_ref:
         sam3_config = resolve_hydra_config(str(hydra_ref))
     else:
         tpl_ref = str(config.get("template") or DEFAULT_TEMPLATE)
         tpl_path = _resolve_frontend_path(tpl_ref, must_exist=True)
-        sam3_config = materialize_hydra_config(tpl_path, net_path, net_cfg)
+        sam3_config = materialize_hydra_config(
+            tpl_path, net_path, net_cfg, dataset_blocks=dataset_blocks)
 
     resolution = config.get("resolution")
 
@@ -469,9 +644,19 @@ def train(config: Dict) -> None:
         log_dir = _resolve_frontend_path(str(output_path)).as_posix()
         hydra_overrides.append(f'paths.experiment_log_dir="{log_dir}"')
 
-    data_config = data_cfg.get("config")
     if data_config:
         hydra_overrides += build_dataset_overrides(str(data_config))
+        # 多数据集: dataset 块已拼进模板, 但 meters 段的 gt_path 仍插值
+        # ${paths.dataset_root}/valid/... (多根时 dataset_root 无意义)。指向第一个
+        # 数据集的 val 标注, 评测只覆盖它 (best-effort; 多数据集完整评测需后端改造)。
+        if dataset_blocks:
+            ds_path = _resolve_frontend_path(str(data_config), must_exist=True)
+            ds = load_yaml_config(str(ds_path)) or {}
+            first = ds.get("datasets", [{}])[0]
+            f = _resolve_dataset_entry(first, ds_path)
+            hydra_overrides.append(
+                f'trainer.meters.val.custom.detection.pred_file_evaluators.0'
+                f'.gt_path="{f["root"]}/{f["val_sub"]}/{f["ann_file"]}"')
 
     # 预训练权重注入 (后端 build_sam3_image_model: checkpoint_path 优先;
     # 为 None 且 load_from_HF=True 时从 HF 下载; 两者都空 = 从头训练)
