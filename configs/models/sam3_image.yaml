@@ -19,10 +19,17 @@
 
 hydra:
   trainer:
+    # 构建参数全集 (后端 build_sam3_image_model 签名, 缺省 = 后端默认):
+    #   bpe_path / device / eval_mode / checkpoint_path / load_from_HF /
+    #   image_size / enable_segmentation / enable_inst_interactivity / compile
     model:
       _target_: sam3.model_builder.build_sam3_image_model
       bpe_path: ${paths.bpe_path}
       device: cpus            # 在 CPU 上构建, 由 Trainer 搬到 GPU
       eval_mode: false
       enable_segmentation: ${scratch.enable_segmentation}   # ← 模板 scratch 段 (分割训练开关)
+      # enable_inst_interactivity: false  # SAM1 交互式 (点/框 prompt) 分支; 开启会多出
+      #                                   # inst_interactive_predictor + vision_backbone.sam2_convs
+      #                                   # 两块参数; 文本检测/分割训练用不到, 别开
+      # compile:                          # torch.compile 模式 (如 "default"); 训练一般不开
       # checkpoint_path / load_from_HF / image_size 由前端 model 字段 / resolution 注入 (++ 前缀)

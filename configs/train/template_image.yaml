@@ -233,8 +233,11 @@ hydra:
     val_epoch_freq: 10
     mode: train   # 改为 val 可做纯评测
     # 真冻结 (requires_grad=False: 不算梯度/不进优化器/DDP 不同步, 比 lr=0 省算力):
-    # unix pattern 列表, 匹配参数名; 例: 冻结图像+文本编码器, 只训 transformer 主体
+    # unix fnmatch pattern 列表, 匹配参数名; 由前端 train.freeze 旋钮覆盖
+    # 例: 冻结图像+文本编码器, 只训 transformer 主体
     # freeze: ["backbone.vision_backbone.*", "backbone.language_backbone.*"]
+    # 全部可冻模块清单 (主干/transformer/检测头/分割头逐模块) 见训练入口配置
+    # configs/train/custom_finetune.yaml 的 freeze 段注释
     freeze: []
     # 早停 (按验证次数计, 验证间隔 = val_epoch_freq):
     early_stop:

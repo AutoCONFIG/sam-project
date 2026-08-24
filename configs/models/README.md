@@ -19,6 +19,8 @@
 #   freeze: []        — 真冻结 (requires_grad=False: 不算梯度/不进优化器/DDP 不同步,
 #                       比把某组 lr 设为 0 省算力省显存), unix pattern 列表, 如
 #                       ["backbone.vision_backbone.*", "backbone.language_backbone.*"]
+#                       (全部可冻模块清单见 configs/train/custom_finetune.yaml 的
+#                        freeze 段注释)
 #   early_stop:       — 早停 (enabled/patience/metric/mode/min_delta), 开关与
 #                       patience 也可在训练入口配置的 train.early_stop* 旋钮里调
 #

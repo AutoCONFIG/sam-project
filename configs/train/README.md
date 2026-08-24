@@ -72,9 +72,11 @@
 #   early_stop: false       # → trainer.early_stop.enabled (按验证次数计)
 #   early_stop_patience: 5  # → trainer.early_stop.patience
 #   # 参数冻结
-#   freeze:                 # → trainer.freeze (unix pattern 列表, 匹配参数名; 真冻结
+#   freeze:                 # → trainer.freeze (unix fnmatch pattern 列表, 匹配参数名; 真冻结
 #     - backbone.vision_backbone.*    #   requires_grad=False, 比 lr=0 省算力;
 #     - backbone.language_backbone.*  #   例: 冻结图像+文本编码器只训 transformer; 删掉或 []=全量微调)
+#                         # 全部可冻模块清单 (主干层段/transformer/各检测头/分割头等)
+#                         # 见 custom_finetune.yaml 的 freeze 段注释
 #   # 损失权重 / 匹配器成本 (默认=官方值, 一般不用动; 源在 custom_data.loss / scratch.matcher)
 #   loss_bbox: 5.0          # 框 L1 损失权重 (loss_fns_find.0=Boxes)
 #   loss_giou: 2.0          # 框 GIoU 损失权重 (小目标多可适当抬高)
