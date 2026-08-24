@@ -377,11 +377,12 @@ def build_hydra_overrides(knobs: Dict[str, Any]) -> List[str]:
         overrides.append(f"{hydra_key}={value}")
 
     # freeze 是 pattern 列表 (trainer.freeze 为 list 键, 走不了上面的标量映射):
-    # unix fnmatch 匹配参数名, 真冻结 (requires_grad=False, 不进优化器/DDP 不同步)
+    # unix fnmatch 匹配参数名, 真冻结 (requires_grad=False, 不进优化器/DDP 不同步)。
+    # 用 ++ 前缀: 官方参考配置 (roboflow_v100 等, hydra_config 逃生舱) 没有该键
     freeze = knobs.get("freeze")
     if freeze is not None:
         pats = ",".join(f"'{p}'" for p in freeze)
-        overrides.append(f"trainer.freeze=[{pats}]")
+        overrides.append(f"++trainer.freeze=[{pats}]")
 
     return _dedupe_overrides(overrides)
 

@@ -1,80 +1,111 @@
-# SAM 3 训练配置 (Roboflow 官方参考配置复现/对照)
+# SAM 3 训练配置: Roboflow 官方参考配置复现/对照 (hydra_config 逃生舱示例)
 # 用法: python sam.py configs/train/roboflow_finetune.yaml
 #
-# 注意: hydra_config 直接指向子模块内官方参考配置 (上游可能更新, 不平铺拷贝),
-# 数据集路径在该配置的 paths 段里改, 不支持 configs/datasets/ 注入 (键名不同)
+# 配置分离模式 (参照 yolo-project):
+#   configs/train/xxx.yaml            ← 本文件: 训练入口 (模型/分辨率/数据集/训练旋钮/输出)
+#   configs/train/template_image.yaml ← 训练模板: 训练超参数全集 (transforms/loss/优化器
+#                                       /调度器/评测/分布式默认值), 与模型配置合并生成后端配置
+#   configs/models/xxx.yaml           ← 模型配置 (只定义模型构建; 网络结构在后端代码里)
+#   configs/datasets/xxx.yaml         ← 数据集配置 (COCO 格式)
+#   configs/export/xxx.yaml           ← ONNX 导出配置 (mode: export, 独立命令)
 #
 # 约定: 下面列出前端支持的全部字段 (均已核实为后端真实存在的键),
-# 默认值与官方参考配置一致; 删掉/留空某字段 = 不修改后端, 用后端原值
+# 默认值与后端一致; 删掉/留空某字段 = 不修改后端, 用后端原值
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# 当前实验: 官方 roboflow_v100 参考配置复现 —— hydra_config 直接指向子模块内
+#   官方配置 (上游可能更新, 不平铺拷贝), template 字段被忽略; 不支持
+#   configs/datasets/ 注入 (键名不同), 数据集路径在官方配置的 paths 段里改。
+#   注意官方配置 submitit.use_cluster 默认 True (本地必须显式 use_cluster: 0),
+#   skip_saving_ckpts 默认 true 不存 checkpoint (必须显式 false)。
+# ─────────────────────────────────────────────────────────────────────────────
 mode: train
 
-# 模型: 权重 .pt = 预训练微调 / hf 或删掉 = HF 下载官方权重 / 模型配置 .yaml = 从头训练
+# 模型: 权重 .pt = 预训练微调 (预训练不改网络结构, 默认模型配置 = configs/models/sam3_image.yaml)
+#       模型配置 .yaml = 从头训练 / hf 或删掉本行 = HF 自动下载官方权重微调 (gated repo 需 token)
 model: pretrain/sam3/sam3.pt
 
-# 逃生舱: 直接使用子模块内官方参考配置 (绕过训练模板 template_image.yaml + 默认模型配置)
+resolution: 1008        # 训练分辨率, 336 的倍数 → scratch.resolution + trainer.model.image_size
+                        # (≥24G 显存可 1008; 16G 用 672; 微调产物用于 predict 的 finetune_ckpt
+                        #  时, predict yaml 的 image_size 需与此一致)
+
+# 逃生舱: 直接使用子模块内的现成 Hydra 配置 (绕过训练模板+模型配置), 如官方参考配置
 hydra_config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
 
-resolution: 1008        # 训练分辨率, 336 的倍数
+# 训练模板: 训练超参数全集 (transforms/loss/优化器等默认值), 一般不用换
+#   template_image_seg.yaml = 分割训练 (数据集带 segmentation)
+#   template_image.yaml     = 纯检测训练 (无 mask 标注的数据集)
+#   (本例 hydra_config 逃生舱生效, 本字段被忽略)
+# template: configs/train/template_image.yaml
 
 data:
-  config:               # 数据集配置 (独立 YAML); 本例用官方参考配置时不支持, 留空
+  config:               # 数据集配置 (独立 YAML); 本例用官方参考配置时不支持注入, 留空
 
 train:
   # ── 资源 ──
-  use_cluster: 0        # 0=本地, 1=SLURM 集群 (官方参考配置默认 1, 本地必须显式设 0)
-  num_gpus: 4           # 每节点 GPU 数 (按机器改)
+  use_cluster: 0        # 0=本地, 1=SLURM 集群
+  num_gpus: 4           # 每节点 GPU 数 (按机器改, 后端默认 1)
   num_nodes: 1          # 节点数
-  device:               # 指定用哪几张卡, 如 "0,1,2,3"; 空=全部可见卡
+  device:               # 指定用哪几张卡, 如 "0,1,2,3" (CUDA_VISIBLE_DEVICES); 空=全部可见卡
   partition:            # SLURM 分区 (仅 use_cluster: 1)
   account:              # SLURM 账户 (仅 use_cluster: 1)
   qos:                  # SLURM QOS (仅 use_cluster: 1)
   timeout_hour: 72      # 任务时限 → submitit.timeout_hour (仅集群)
   cpus_per_task: 10     # 每任务 CPU 数 → submitit.cpus_per_task (仅集群)
 
+  # ── 参数冻结 ──
+  # 真冻结 (requires_grad=False: 不算梯度/不进优化器/DDP 不同步, 比 lr=0 省算力)
+  # unix pattern 列表, 匹配参数名 → ++trainer.freeze; 留空 = 不冻结 (后端默认)
+  # 例: 冻结双主干只训 transformer+检测/分割头 (保留预训练通用能力, 小数据集更稳):
+  # freeze:
+  #   - backbone.vision_backbone.*    # ViT 图像主干
+  #   - backbone.language_backbone.*  # 文本编码器 (prompt 语义保持预训练)
+  freeze:
+
   # ── 优化器 / 学习率 ──
-  lr_scale: 0.1              # → scratch.lr_scale
-  weight_decay: 0.1          # → scratch.wd
-  lrd: 0.9                   # → scratch.lrd_vision_backbone
-  scheduler_timescale: 20    # → scratch.scheduler_timescale
-  scheduler_warmup: 20       # → scratch.scheduler_warmup
-  scheduler_cooldown: 20     # → scratch.scheduler_cooldown
-  grad_clip: 0.1             # → trainer.optim.gradient_clip.max_norm
-  amp: true                  # → trainer.optim.amp.enabled
-  amp_dtype: bfloat16        # → trainer.optim.amp.amp_dtype
+  lr_scale: 0.1              # 学习率缩放 (各组 lr = base × lr_scale) → scratch.lr_scale
+  weight_decay: 0.1          # 权重衰减 → scratch.wd
+  lrd: 0.9                   # ViT 逐层学习率衰减 → scratch.lrd_vision_backbone
+  scheduler_timescale: 20    # 调度器 timescale → scratch.scheduler_timescale
+  scheduler_warmup: 20       # 预热步数 → scratch.scheduler_warmup
+  scheduler_cooldown: 20     # 冷却步数 → scratch.scheduler_cooldown
+  grad_clip: 0.1             # 梯度裁剪范数 → trainer.optim.gradient_clip.max_norm
+  amp: true                  # 混合精度开关 → trainer.optim.amp.enabled
+  amp_dtype: bfloat16        # 混合精度 dtype → trainer.optim.amp.amp_dtype
 
   # ── 训练循环 ──
-  batch: 1              # → scratch.train_batch_size
-  epochs: 20            # → trainer.max_epochs
-  grad_accum: 1         # → scratch.gradient_accumulation_steps
-  seed: 123             # → trainer.seed_value
-  val_freq: 10          # → trainer.val_epoch_freq
-  skip_first_val: true  # → trainer.skip_first_val
-  val_batch: 1          # → scratch.val_batch_size
+  batch: 1              # 每卡 batch → scratch.train_batch_size (按显存调, 16G@672 可试 2)
+  epochs: 20            # 训练轮数 → trainer.max_epochs
+  grad_accum: 1         # 梯度累积步数 → scratch.gradient_accumulation_steps
+  seed: 123             # 随机种子 → trainer.seed_value
+  val_freq: 10          # 每隔几轮验证 → trainer.val_epoch_freq
+  skip_first_val: true  # 跳过训练前首次验证 → trainer.skip_first_val
+  val_batch: 1          # 验证 batch → scratch.val_batch_size
   early_stop: false     # 早停开关 → trainer.early_stop.enabled (按验证次数计)
-  early_stop_patience: 5  # → trainer.early_stop.patience
+  early_stop_patience: 5  # 连续 N 次验证无改进即停 → trainer.early_stop.patience
 
-  # ── 损失权重 / 匹配器成本 (默认=官方值; 一般不用动, 明确知道问题再调) ──
-  loss_bbox: 5.0        # 框 L1 损失权重
-  loss_giou: 2.0        # 框 GIoU 损失权重 (小目标多可适当抬高)
-  loss_ce: 20.0         # 分类 BCE 损失权重
-  presence_loss: 20.0   # presence 损失权重
-  pos_weight: 10.0      # 分类正样本 BCE 权重
-  focal_alpha: 0.25     # focal α
-  focal_gamma: 2        # focal γ
-  o2m_weight: 2.0       # one-to-many 辅助分支权重
+  # ── 损失权重 / 匹配器成本 (默认=官方值; 一般不用动, 明确知道问题再调, 如小目标多可抬 loss_giou) ──
+  loss_bbox: 5.0        # 框 L1 损失权重 → loss...Boxes.weight_dict.loss_bbox
+  loss_giou: 2.0        # 框 GIoU 损失权重 → loss...Boxes.weight_dict.loss_giou
+  loss_ce: 20.0         # 分类 BCE 损失权重 → loss...IABCEMdetr.weight_dict.loss_ce
+  presence_loss: 20.0   # presence 损失权重 → loss...IABCEMdetr.weight_dict.presence_loss
+  pos_weight: 10.0      # 分类正样本 BCE 权重 → loss...IABCEMdetr.pos_weight
+  focal_alpha: 0.25     # focal α → loss...IABCEMdetr.alpha
+  focal_gamma: 2        # focal γ → loss...IABCEMdetr.gamma
+  o2m_weight: 2.0       # one-to-many 辅助分支权重 → loss.o2m_weight
   matcher_cost_class: 2.0  # 匈牙利匹配分类成本 → scratch.matcher.cost_class
-  matcher_cost_bbox: 5.0   # 匈牙利匹配 bbox 成本
-  matcher_cost_giou: 2.0   # 匈牙利匹配 GIoU 成本
+  matcher_cost_bbox: 5.0   # 匈牙利匹配 bbox 成本 → scratch.matcher.cost_bbox
+  matcher_cost_giou: 2.0   # 匈牙利匹配 GIoU 成本 → scratch.matcher.cost_giou
 
   # ── 数据加载 ──
-  workers: 10           # → scratch.num_train_workers
-  val_workers: 0        # → scratch.num_val_workers
-  max_ann_per_img: 200  # → scratch.max_ann_per_img
+  workers: 10           # 训练 dataloader 进程数 → scratch.num_train_workers (Windows 建议 0)
+  val_workers: 0        # 验证 dataloader 进程数 → scratch.num_val_workers
+  max_ann_per_img: 200  # 单图最多标注数 (超出过滤) → scratch.max_ann_per_img
 
   # ── 记录 / 保存 ──
-  save_freq: 0          # → trainer.checkpoint.save_freq (0=只存最后一个)
-  log_freq: 10          # → trainer.logging.log_freq
-  skip_saving_ckpts: false  # → trainer.skip_saving_ckpts (官方参考配置默认 true 不存 checkpoint, 必须显式 false)
+  save_freq: 0          # checkpoint 保存频率, 0=只存最后一个 → trainer.checkpoint.save_freq
+  log_freq: 10          # 日志打印频率 (step) → trainer.logging.log_freq
+  skip_saving_ckpts: false  # 是否不存 checkpoint → trainer.skip_saving_ckpts (微调必须 false)
 
 output:
-  path: runs/train/roboflow_ft    # 实验输出目录 → paths.experiment_log_dir
+  path: runs/train/roboflow_ft    # 实验输出目录 (checkpoints/tensorboard/logs) → paths.experiment_log_dir

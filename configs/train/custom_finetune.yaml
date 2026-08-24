@@ -1,4 +1,4 @@
-# SAM 3 自定义数据集微调配置 (模型/数据集/训练 分离配置)
+# SAM 3 训练配置: highway_road 自定义数据集分割微调
 # 用法: python sam.py configs/train/custom_finetune.yaml
 #
 # 配置分离模式 (参照 yolo-project):
@@ -13,7 +13,7 @@
 # 默认值与后端一致; 删掉/留空某字段 = 不修改后端, 用后端原值
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# 当前实验: highway_road 高速公路 8 类区域分割微调
+# 当前实验: highway_road 高速公路 8 类区域分割微调 (1571 train / 177 valid)
 #   策略: 冻结 ViT 图像主干 + 文本编码器 (保住预训练通用检测能力, 防止微调后
 #   其他类别退化), 只训 transformer 主体 + 检测/分割头; 数据集带 mask 标注,
 #   用分割训练模板 (template_image_seg.yaml); 分辨率 672 适配 16G 显存,
@@ -33,7 +33,7 @@ resolution: 672         # 训练分辨率, 336 的倍数 → scratch.resolution 
 # hydra_config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
 
 # 训练模板: 训练超参数全集 (transforms/loss/优化器等默认值), 一般不用换
-#   template_image_seg.yaml = 分割训练 (本实验, 数据集带 segmentation)
+#   template_image_seg.yaml = 分割训练 (数据集带 segmentation)
 #   template_image.yaml     = 纯检测训练 (无 mask 标注的数据集)
 template: configs/train/template_image_seg.yaml
 
@@ -52,19 +52,19 @@ train:
   timeout_hour: 72      # 任务时限 → submitit.timeout_hour (仅集群)
   cpus_per_task: 10     # 每任务 CPU 数 → submitit.cpus_per_task (仅集群)
 
-  # ── 参数冻结 (微调策略核心) ──
+  # ── 参数冻结 ──
   # 真冻结 (requires_grad=False: 不算梯度/不进优化器/DDP 不同步, 比 lr=0 省算力)
-  # unix pattern 列表, 匹配参数名 → trainer.freeze; 删掉本段或 freeze: [] = 全量微调
-  # 冻结双主干 = 只训 transformer+检测/分割头: 保留预训练通用能力, 小数据集上更稳
+  # unix pattern 列表, 匹配参数名 → ++trainer.freeze; 留空 = 不冻结 (后端默认)
+  # 常用: backbone.vision_backbone.* (ViT 图像主干) / backbone.language_backbone.*
+  # (文本编码器) —— 冻结双主干只训 transformer+检测/分割头, 保留预训练通用能力
   freeze:
-    - backbone.vision_backbone.*    # ViT 图像主干 (预训练视觉特征已经够好)
-    - backbone.language_backbone.*  # 文本编码器 (prompt 语义保持预训练, 不破坏开放词表能力)
+    - backbone.vision_backbone.*
+    - backbone.language_backbone.*
 
   # ── 优化器 / 学习率 ──
   lr_scale: 0.1              # 学习率缩放 (各组 lr = base × lr_scale) → scratch.lr_scale
-                             # (冻结主干后实际只有 transformer 组生效: 8e-4×0.1=8e-5)
   weight_decay: 0.1          # 权重衰减 → scratch.wd
-  lrd: 0.9                   # ViT 逐层学习率衰减 → scratch.lrd_vision_backbone (冻结后不生效)
+  lrd: 0.9                   # ViT 逐层学习率衰减 → scratch.lrd_vision_backbone
   scheduler_timescale: 20    # 调度器 timescale → scratch.scheduler_timescale
   scheduler_warmup: 20       # 预热步数 → scratch.scheduler_warmup
   scheduler_cooldown: 20     # 冷却步数 → scratch.scheduler_cooldown
@@ -73,8 +73,8 @@ train:
   amp_dtype: bfloat16        # 混合精度 dtype → trainer.optim.amp.amp_dtype
 
   # ── 训练循环 ──
-  batch: 1              # 每卡 batch → scratch.train_batch_size (672+冻结主干下 16G 可试 2)
-  epochs: 12            # 训练轮数 → trainer.max_epochs (1571 张 ≈ 每轮 1571 step)
+  batch: 1              # 每卡 batch → scratch.train_batch_size (按显存调, 16G@672 可试 2)
+  epochs: 12            # 训练轮数 → trainer.max_epochs
   grad_accum: 1         # 梯度累积步数 → scratch.gradient_accumulation_steps
   seed: 123             # 随机种子 → trainer.seed_value
   val_freq: 2           # 每隔几轮验证 → trainer.val_epoch_freq
@@ -82,7 +82,6 @@ train:
   val_batch: 1          # 验证 batch → scratch.val_batch_size
   early_stop: true      # 早停开关 → trainer.early_stop.enabled (按验证次数计)
   early_stop_patience: 3  # 连续 N 次验证无改进即停 → trainer.early_stop.patience
-                        # (val_freq 2 × patience 3 = 最多容忍 6 轮无改进)
 
   # ── 损失权重 / 匹配器成本 (默认=官方值; 一般不用动, 明确知道问题再调, 如小目标多可抬 loss_giou) ──
   loss_bbox: 5.0        # 框 L1 损失权重 → loss...Boxes.weight_dict.loss_bbox
