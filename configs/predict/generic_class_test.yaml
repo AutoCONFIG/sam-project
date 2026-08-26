@@ -3,6 +3,7 @@
 # 目的: 与 highway_road_preview.yaml (8 类道路区域特殊类) 对照,
 # 判断"效果差"是代码问题还是预训练模型在特殊类上的零样本能力问题。
 # 输入单一场景 (长张高速K76, 24 帧, 画面中有明显小汽车/货车)。
+# prompt 选 COCO 常见类: car/truck 高速场景必有; road/sky 验证区域类。
 #
 # 字段与注释模板与 video_text.yaml 完全一致;
 # 删掉/留空某字段 = 用代码默认值, 与写默认值等价。
@@ -18,7 +19,7 @@ model:
   finetune_ckpt:                    # 微调权重 (训练链产出 runs/train/.../checkpoints/checkpoint.pt;
                                     # 仅 sam3.1, 加载进 detector, checkpoint 仍提供 tracker 等基础权重;
                                     # 注意训练 resolution 需与 image_size 一致), 空=纯预训练 (默认)
-  image_size: 672                  # 推理分辨率, 须为 336 的倍数; ≥24G 显存 1008, 16G 用 672
+  image_size: 672                   # 推理分辨率, 须为 336 的倍数; ≥24G 显存 1008, 16G 用 672
                                     # (仅 sam3.1 支持; sam3 原版后端固定 1008)
   max_num_objects: 32               # 单 session 最多同时跟踪对象数, 超出丢弃并告警
                                     # (仅 sam3.1; 运行时上限, 多目标场景可自由调大, 显存随之涨)
@@ -59,9 +60,6 @@ io:
 # 固有, 无法避免。多类别耗时约为 N 类别 × 单类别时间。
 #
 # 兼容: 字符串 (如 text: "person") 会被自动转单元素列表, 但推荐列表写法。
-#
-# 本配置: COCO 常见类对照 — car/truck 高速场景必有; road/sky 验证区域类;
-# person 稀少 (检验误报)
 # ─────────────────────────────────────────────────────────────────────
 
 prompt:

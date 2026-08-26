@@ -1,8 +1,8 @@
 # SAM 3 原版推理配置 — 文本提示 (sam3, 非 multiplex)
 # ==================================================
 # 用 SAM 3 原版权重推理。注意:
-#   - sam3 原版的 image_size 后端固定 1008, 不支持参数化 (需 ≥24GB 显存)
-#   - 16GB 显卡跑不了此配置, 请用 video_text.yaml (sam3.1 + 可调分辨率)
+#   - sam3 原版的 image_size 后端固定 1008, 不支持参数化 (需 ≥24GB 显存),
+#     本配置勿改 image_size; 16GB 显卡跑不了, 请用 video_text.yaml (sam3.1)
 #   - max_num_objects / multiplex_count / compile 仅 sam3.1 支持, 本配置中无效
 #
 # 字段与注释模板与 video_text.yaml 完全一致;
@@ -20,7 +20,7 @@ model:
                                     # 仅 sam3.1, 加载进 detector, checkpoint 仍提供 tracker 等基础权重;
                                     # 注意训练 resolution 需与 image_size 一致), 空=纯预训练 (默认)
   image_size: 1008                  # 推理分辨率, 须为 336 的倍数; ≥24G 显存 1008, 16G 用 672
-                                    # (仅 sam3.1 支持; sam3 原版后端固定 1008, 本配置勿改)
+                                    # (仅 sam3.1 支持; sam3 原版后端固定 1008)
   max_num_objects: 16               # 单 session 最多同时跟踪对象数, 超出丢弃并告警
                                     # (仅 sam3.1; 运行时上限, 多目标场景可自由调大, 显存随之涨)
   multiplex_count: 16               # 每个 multiplex 桶的对象容量 (仅 sam3.1)
