@@ -111,6 +111,12 @@ TRAIN_KEY_MAP = {
     "skip_saving_ckpts": "trainer.skip_saving_ckpts",  # 微调必须 false
     "early_stop": "++trainer.early_stop.enabled",      # 早停开关 (按验证次数计)
     "early_stop_patience": "++trainer.early_stop.patience",  # 连续 N 次验证无改进即停
+    # ── 验证可视化 (YOLO 风格马赛克; 只影响出图, 不影响训练与 mAP) ──
+    "viz_max_files": "trainer.meters.val.custom.viz.max_files",
+    "viz_per_file": "trainer.meters.val.custom.viz.per_file",
+    "viz_score_threshold": "trainer.meters.val.custom.viz.score_threshold",
+    "viz_min_per_img": "trainer.meters.val.custom.viz.min_per_img",
+    "viz_max_per_img": "trainer.meters.val.custom.viz.max_per_img",
     # ── 损失权重 / 匹配器成本 ──
     # loss 段源在 custom_data.loss (经插值 ${custom_data.loss} 进 trainer.loss.all,
     # 无法从 trainer 侧覆盖, 必须覆盖源); loss_fns_find 列表顺序固定: 0=Boxes 1=IABCEMdetr;
@@ -512,7 +518,7 @@ def build_dataset_blocks(
     return {"train": train_lines, "val": val_lines}
 
 
-def build_hydra_overrides(knobs: Dict[str, Any]) -> List[str]:
+def build_hydra_overrides(knobs: Dict[str, Any], escape_hatch: bool = False) -> List[str]:
     """把前端常用配置翻译为 Hydra override 列表。
 
     ``++`` 前缀 = 键可能不存在于参考配置中 (image_size 在参考配置的 model 段里
@@ -520,6 +526,13 @@ def build_hydra_overrides(knobs: Dict[str, Any]) -> List[str]:
     自动 add-or-override; 其余映射的键都已在模板/参考配置里核实存在, 用普通 ``=``。
     """
     overrides: List[str] = []
+
+    # viz meter 只存在于训练模板 (template_image*.yaml); hydra_config 逃生舱指向
+    # 官方参考配置时没有该键, 普通 override 会报 "key not found" 启动失败
+    if escape_hatch and any(
+        k.startswith("viz_") and knobs.get(k) is not None for k in TRAIN_KEY_MAP
+    ):
+        print("提示: hydra_config 逃生舱配置没有 viz meter, 已跳过 viz_* 覆盖")
 
     resolution = knobs.get("resolution")
     if resolution is not None:
@@ -538,6 +551,15 @@ def build_hydra_overrides(knobs: Dict[str, Any]) -> List[str]:
         value = knobs.get(knob)
         if value is None:
             continue
+        if escape_hatch and knob.startswith("viz_"):
+            continue
+        if knob == "val_freq" and int(value) < 1:
+            # 后端 trainer 用 epoch % val_epoch_freq 排验证, 0 会在首轮结束时
+            # ZeroDivisionError (且 checkpoint 尚未保存); 不支持 "0=不验证"
+            raise ValueError(
+                f"val_freq 必须 >= 1 (每隔几轮验证; 得到 {value})。"
+                "最后一轮无论如何都会验证, 不存在完全关闭验证的写法"
+            )
         if isinstance(value, bool):
             value = str(value).lower()
         overrides.append(f"{hydra_key}={value}")
@@ -671,7 +693,7 @@ def train(config: Dict) -> None:
         "resolution": resolution,
         "freeze": train_cfg.get("freeze"),
         **{k: train_cfg.get(k) for k in TRAIN_KEY_MAP},
-    })
+    }, escape_hatch=bool(hydra_ref))
     hydra_overrides = _dedupe_overrides(hydra_overrides)
     if hydra_ref:
         # 逃生舱指向官方参考配置: 数据/loss 段名为 roboflow_train (结构与 custom_data 相同)

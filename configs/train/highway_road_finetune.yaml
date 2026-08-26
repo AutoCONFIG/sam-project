@@ -1,5 +1,5 @@
-# SAM 3 训练配置: Roboflow 官方参考配置复现/对照 (hydra_config 逃生舱示例)
-# 用法: python sam.py configs/train/roboflow_finetune.yaml
+# SAM 3 训练配置: highway_road 自定义数据集分割微调
+# 用法: python sam.py configs/train/highway_road_finetune.yaml
 #
 # 配置分离模式 (参照 yolo-project):
 #   configs/train/xxx.yaml            ← 本文件: 训练入口 (模型/分辨率/数据集/训练旋钮/输出)
@@ -13,41 +13,43 @@
 # 默认值与后端一致; 删掉/留空某字段 = 不修改后端, 用后端原值
 #
 # ─────────────────────────────────────────────────────────────────────────────
-# 当前实验: 官方 roboflow_v100 参考配置复现 —— hydra_config 直接指向子模块内
-#   官方配置 (上游可能更新, 不平铺拷贝), template 字段被忽略; 不支持
-#   configs/datasets/ 注入 (键名不同), 数据集路径在官方配置的 paths 段里改。
-#   注意官方配置 submitit.use_cluster 默认 True (本地必须显式 use_cluster: 0),
-#   skip_saving_ckpts 默认 true 不存 checkpoint (必须显式 false);
-#   freeze 经 ++trainer.freeze 注入, 对官方配置同样生效 (它没有 freeze 键),
-#   本例留空 = 全量微调 (官方参考配置即全量)。
+# 当前实验: highway_road 高速公路 3 类区域分割微调 (6747 train / 1601 valid)
+#   类别: highway up direction / highway down direction / road isolation zone
+#   数据: 17 个源子数据集经 tools/merge_highway_coco_dedup.py 合并为单数据集
+#   (id 全局唯一, 已按内容 md5 去重并剔除 train/valid 泄漏; 不用多数据集拼接
+#   是因为拼接后 image id 冲突 + 评测 GT 只覆盖首个子集, val mAP/早停不可信)。
+#   策略: 冻结 ViT 图像主干 + 文本编码器 (保住预训练通用检测能力, 防止微调后
+#   其他类别退化), 只训 transformer 主体 + 检测/分割头; 数据集带 mask 标注,
+#   用分割训练模板 (template_image_seg.yaml); 分辨率 1008 充分利用 24G 显存,
+#   且与 predict 的 image_size 一致 (finetune_ckpt 要求训练/推理分辨率一致)
 # ─────────────────────────────────────────────────────────────────────────────
 mode: train
 
 # 模型: 权重 .pt = 预训练微调 (预训练不改网络结构, 默认模型配置 = configs/models/sam3_image.yaml)
 #       模型配置 .yaml = 从头训练 / hf 或删掉本行 = HF 自动下载官方权重微调 (gated repo 需 token)
-model: pretrain/sam3/sam3.pt
+model: pretrain/sam3.1/sam3.1_multiplex.pt
 
-resolution: 1008        # 训练分辨率, 336 的倍数 → scratch.resolution + trainer.model.image_size
+resolution: 1008         # 训练分辨率, 336 的倍数 → scratch.resolution + trainer.model.image_size
                         # (升 1008 更准但更耗显存, 需同步降 batch; 微调产物用于 predict 的
                         #  finetune_ckpt 时, predict yaml 的 image_size 需与此一致)
 
 # 逃生舱: 直接使用子模块内的现成 Hydra 配置 (绕过训练模板+模型配置), 如官方参考配置
-hydra_config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
+# hydra_config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
 
 # 训练模板: 训练超参数全集 (transforms/loss/优化器等默认值), 一般不用换
 #   template_image_seg.yaml = 分割训练 (数据集带 segmentation)
 #   template_image.yaml     = 纯检测训练 (无 mask 标注的数据集)
-# template: configs/train/template_image.yaml
+template: configs/train/template_image_seg.yaml
 
 data:
-  config:               # 数据集配置 (独立 YAML)
+  config: configs/datasets/highway_road_merged.yaml   # 数据集配置 (独立 YAML)
 
 train:
   # ── 资源 ──
   use_cluster: 0        # 0=本地, 1=SLURM 集群
-  num_gpus: 4           # 每节点 GPU 数 (按机器改, 后端默认 1)
+  num_gpus: 8           # 每节点 GPU 数 (按机器改, 后端默认 1)
   num_nodes: 1          # 节点数
-  device:               # 指定用哪几张卡, 如 "0,1,2,3" (CUDA_VISIBLE_DEVICES); 空=全部可见卡
+  device: "0,1,2,3,4,5,6,7" # 指定用哪几张卡, 如 "0,1,2,3" (CUDA_VISIBLE_DEVICES); 空=全部可见卡
   partition:            # SLURM 分区 (仅 use_cluster: 1)
   account:              # SLURM 账户 (仅 use_cluster: 1)
   qos:                  # SLURM QOS (仅 use_cluster: 1)
@@ -100,6 +102,8 @@ train:
   # trainable" 及前 10 个被冻参数名 —— 改完 pattern 先看这行确认生效;
   # pattern 命中全部参数会直接报错 (至少保留 1 个可训参数)
   freeze:
+    - backbone.vision_backbone.*
+    - backbone.language_backbone.*
 
   # ── 优化器 / 学习率 ──
   lr_scale: 0.1              # 学习率缩放 (各组 lr = base × lr_scale) → scratch.lr_scale
@@ -113,15 +117,15 @@ train:
   amp_dtype: bfloat16        # 混合精度 dtype → trainer.optim.amp.amp_dtype
 
   # ── 训练循环 ──
-  batch: 1              # 每卡 batch → scratch.train_batch_size (按显存调; 全新训练显存约为冻结主干微调的 2~3 倍)
-  epochs: 20            # 训练轮数 → trainer.max_epochs
+  batch: 7              # 每卡 batch → scratch.train_batch_size (按显存调; 全新训练显存约为冻结主干微调的 2~3 倍)
+  epochs: 200            # 训练轮数 → trainer.max_epochs
   grad_accum: 1         # 梯度累积步数 → scratch.gradient_accumulation_steps
   seed: 123             # 随机种子 → trainer.seed_value
-  val_freq: 10          # 每隔几轮验证 (>=1; 0 会让后端除零崩溃) → trainer.val_epoch_freq
-  skip_first_val: true  # 跳过首轮 (epoch 0) 结束时的验证 → trainer.skip_first_val
-  val_batch: 1          # 验证 batch → scratch.val_batch_size
-  early_stop: false     # 早停开关 → trainer.early_stop.enabled (按验证次数计)
-  early_stop_patience: 5  # 连续 N 次验证无改进即停 → trainer.early_stop.patience
+  val_freq: 1           # 每隔几轮验证 (>=1; 0 会让后端除零崩溃) → trainer.val_epoch_freq
+  skip_first_val: false # 跳过首轮 (epoch 0) 结束时的验证 → trainer.skip_first_val
+  val_batch: 7          # 验证 batch → scratch.val_batch_size
+  early_stop: true      # 早停开关 → trainer.early_stop.enabled (按验证次数计)
+  early_stop_patience: 20  # 连续 N 次验证无改进即停 → trainer.early_stop.patience
 
   # ── 验证可视化 (每轮验证结束把验证集 GT/预测拼成马赛克存实验根目录 val_batch*_labels/pred.jpg;
   #    纯 mask 无检测框, 标签带置信度; 异步渲染不阻塞训练; 只影响出图, 不影响训练与 mAP;
@@ -147,7 +151,7 @@ train:
 
   # ── 数据加载 ──
   workers: 10           # 训练 dataloader 进程数 → scratch.num_train_workers (Windows 建议 0)
-  val_workers: 0        # 验证 dataloader 进程数 → scratch.num_val_workers
+  val_workers: 8        # 验证 dataloader 进程数 → scratch.num_val_workers
   max_ann_per_img: 200  # 单图最多标注数 (超出过滤) → scratch.max_ann_per_img
 
   # ── 记录 / 保存 ──
@@ -156,4 +160,4 @@ train:
   skip_saving_ckpts: false  # 是否不存 checkpoint → trainer.skip_saving_ckpts (微调必须 false)
 
 output:
-  path: runs/train/roboflow_ft    # 实验输出目录 (checkpoints/tensorboard/logs) → paths.experiment_log_dir
+  path: runs/train/highway_road/202608261    # 实验输出目录 (checkpoints/tensorboard/logs) → paths.experiment_log_dir

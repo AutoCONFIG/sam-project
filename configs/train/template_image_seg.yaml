@@ -1,6 +1,6 @@
 # SAM 3 训练模板 (图片模型, COCO 分割微调) — 训练超参数全集 [分割变体]
 # ==============================================================
-# 本文件是 template_image.yaml 的分割训练变体: 除 loss/分割开关外完全一致,
+# 本文件是 template_image.yaml 的分割训练变体: 除 loss/分割开关/训练增强外一致,
 # 已按 template_image.yaml 中 custom_data 末尾的 "4 处联动" 说明开启 mask 训练:
 #   1. scratch.enable_segmentation: true                    ← 本模板已开启
 #      (联动 trainer.model 建分割头 / 数据集 load_segmentation / collate with_seg_masks)
@@ -70,6 +70,26 @@ hydra:
             box_noise_std: 0.1
             box_noise_max: 20
           - _target_: sam3.train.transforms.segmentation.DecodeRle
+          # ── 几何/光度增强 (2026-08 新增, 官方配方原本没有) ──
+          # hflip: box/mask/semantic_target 同步翻转; 对本类数据集 (上行/下行/
+          # 隔离带) 左右镜像不改类别语义, 安全。其余任务若类别分左右, 请删掉此项
+          - _target_: sam3.train.transforms.basic_for_api.RandomHorizontalFlip
+            p: 0.5
+            consistent_transform: ${scratch.consistent_transform}
+          # 颜色抖动: 以 p=0.5 概率施加 (RandomSelectAPI 二选一, 缺省另一侧=恒等);
+          # 幅度温和, 适配多来源摄像头 (白天/夜晚/不同路段) 的光照差异
+          - _target_: sam3.train.transforms.basic_for_api.RandomSelectAPI
+            p: 0.5
+            transforms1:
+              _target_: sam3.train.transforms.basic_for_api.ColorJitter
+              brightness: 0.2
+              contrast: 0.2
+              saturation: 0.2
+              hue: 0.05
+              consistent_transform: ${scratch.consistent_transform}
+          - _target_: sam3.train.transforms.basic_for_api.RandomGrayscale
+            p: 0.1
+            consistent_transform: ${scratch.consistent_transform}
           - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
             sizes:
               _target_: sam3.train.transforms.basic.get_random_resize_scales
@@ -103,6 +123,7 @@ hydra:
     val_transforms:
       - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
         transforms:
+          - _target_: sam3.train.transforms.segmentation.DecodeRle
           - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
             sizes: ${scratch.resolution}
             max_size:
@@ -319,7 +340,7 @@ hydra:
           coco_json_loader:
             _target_: sam3.train.data.coco_json_loaders.COCO_FROM_JSON
             include_negatives: true
-            category_chunk_size: 2  # 显存够可以加大
+            category_chunk_size: 8  # 单次前向查询的类别数; <数据集类数会把每图拆成多个样本重复前向, 拖慢验证
             _partial_: true
           img_folder: ${paths.dataset_root}/valid/
           ann_file: ${paths.dataset_root}/valid/_annotations.coco.json
@@ -353,6 +374,23 @@ hydra:
                 gt_path: ${paths.dataset_root}/valid/_annotations.coco.json
                 tide: False
                 iou_type: "bbox"
+          # 每次验证把 rank 0 的验证图攒成 max_files 张马赛克 (per_file 张/张),
+          # val_batch{f}_labels/pred.jpg 存实验根目录 (YOLO 风格, 文件名固定每轮覆盖;
+          # 纯 mask 无检测框, 标签带置信度; 只对 score_threshold 以上的 query
+          # 插值 mask, 避免全量上采样撑爆显存; 分数全低于阈值时至少保留
+          # top min_per_img 让面板不空; 后台线程异步渲染, 不阻塞训练;
+          # 失败仅告警, 不产生指标)
+          viz:
+            _target_: sam3.eval.val_viz.ValPredictionVisualizer
+            out_dir: ${launcher.experiment_log_dir}
+            max_files: 3
+            per_file: 16
+            score_threshold: 0.1
+            min_per_img: 3
+            max_per_img: 5
+            use_presence: ${scratch.use_presence_eval}
+            norm_mean: ${scratch.train_norm_mean}
+            norm_std: ${scratch.train_norm_std}
 
     optim:
       amp:
@@ -409,7 +447,8 @@ hydra:
 
     checkpoint:
       save_dir: ${launcher.experiment_log_dir}/checkpoints
-      save_freq: 0  # 0 = 只保存最后一个 checkpoint.pt
+      save_freq: 0  # 0 = 每轮只覆盖保存最新 checkpoint.pt (= last, 供 resume);
+                    # 开启 early_stop 时, 指标每刷新一次最优就另存一份 checkpoint_best.pt
 
     logging:
       tensorboard_writer:
