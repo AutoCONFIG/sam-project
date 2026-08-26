@@ -5,7 +5,7 @@ SAM 3 Unified CLI Entry Point
 Usage:
 
     python sam.py configs/predict/video_text.yaml
-    python sam.py configs/train/roboflow_finetune.yaml
+    python sam.py configs/train/example/roboflow_finetune.yaml
 
 Mode is auto-detected from the 'mode' field in the YAML config file.
 CLI flags override YAML values (see commands/<mode>.py for details).

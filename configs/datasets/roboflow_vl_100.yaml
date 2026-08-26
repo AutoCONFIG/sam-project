@@ -1,6 +1,6 @@
-# SAM 3 数据集配置: roboflow_vl_100 模板示例 (Roboflow COCO 导出格式)
+# SAM 3 数据集配置: roboflow_vl_100 配置示例 (Roboflow COCO 导出格式)
 # ============================================================================
-# 通用模板 (path 是占位符, 指向你的数据集根目录); 由训练入口配置通过
+# 通用示例 (path 是占位符, 指向你的数据集根目录); 由训练入口配置通过
 # data.config 引用, 如:
 #   data:
 #     config: configs/datasets/roboflow_vl_100.yaml
@@ -12,8 +12,8 @@
 # COCO categories[].name 即文本 prompt (开放词表检测的训练信号)。
 #
 # 注意: 数据集注入依赖 Hydra 配置里的标准键 (paths.dataset_root /
-# trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合训练模板
-# configs/train/template_image*.yaml 使用 (含这些键); 直接用后端自带配置
+# trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合训练配方
+# configs/train/example/recipe_image*.yaml 使用 (含这些键); 直接用后端自带配置
 # (hydra_config 逃生舱, 如 roboflow_v100) 时键名不同不支持注入, 数据路径
 # 在那些配置自己的 paths 段里改。
 

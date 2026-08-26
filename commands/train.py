@@ -74,9 +74,9 @@ BPE_PATH = SAM3_ROOT / "sam3" / "assets" / "bpe_simple_vocab_16e6.txt.gz"
 # 默认模型配置 (model 字段指向权重或缺省时使用)
 DEFAULT_MODEL_CONFIG = "configs/models/sam3_image.yaml"
 
-# 默认训练模板 (后端 Hydra 配置全量默认值: transforms/loss/优化器等超参数;
+# 默认训练配方 (后端 Hydra 配置全量默认值: transforms/loss/优化器等超参数;
 # 模型定义在模型配置里, 物化时文本合并)
-DEFAULT_TEMPLATE = "configs/train/template_image.yaml"
+DEFAULT_RECIPE = "configs/train/example/recipe_image.yaml"
 
 # 数据集 YAML 注入依赖 Hydra 配置里的标准键 (paths.dataset_root /
 # trainer.data.{train,val}.dataset.*), 即模型配置 sam3_image.yaml hydra 段的
@@ -86,7 +86,7 @@ _DEFAULT_VAL_SUBDIR = "valid"
 _DEFAULT_ANN_FILE = "_annotations.coco.json"
 
 # 训练旋钮 → Hydra 键映射: 键均已对照官方 roboflow 参考配置与
-# 训练模板 configs/train/template_image.yaml 逐一核实存在且语义一致
+# 训练配方 configs/train/example/recipe_image.yaml 逐一核实存在且语义一致
 TRAIN_KEY_MAP = {
     "batch": "scratch.train_batch_size",
     "epochs": "trainer.max_epochs",
@@ -105,6 +105,10 @@ TRAIN_KEY_MAP = {
     "val_batch": "scratch.val_batch_size",
     "workers": "scratch.num_train_workers",
     "val_workers": "scratch.num_val_workers",
+    # 用 ++ 前缀: hydra_config 逃生舱指向官方参考配置时没有这些 scratch 键
+    "cache_images": "++scratch.cache_images",          # none=不缓存 / ram=内存缓存 / disk=打包大文件+mmap
+    "persistent_workers": "++scratch.persistent_workers",  # worker 跨 epoch 常驻
+    "prefetch_factor": "++scratch.prefetch_factor",    # 每 worker 预取批数
     "max_ann_per_img": "scratch.max_ann_per_img",   # 单图最多标注数 (超出过滤)
     "save_freq": "trainer.checkpoint.save_freq",    # 0=只存最后一个
     "log_freq": "trainer.logging.log_freq",
@@ -161,7 +165,7 @@ model 字段 (标量): 权重 .pt = 预训练微调 (默认模型配置 configs/
 
     parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
     parser.add_argument("--sam3-config", type=str, default=None,
-                        help="顶层 hydra_config 的 CLI 形式: 直接指定子模块内的 Hydra 训练配置 (绕过训练模板+模型配置)")
+                        help="顶层 hydra_config 的 CLI 形式: 直接指定子模块内的 Hydra 训练配置 (绕过训练配方+模型配置)")
     parser.add_argument("--data", type=str, default=None,
                         help="数据集配置路径 (如 configs/datasets/xxx.yaml)")
     parser.add_argument("--use-cluster", type=int, default=None, choices=[0, 1],
@@ -212,7 +216,7 @@ def resolve_hydra_config(config_value: str) -> str:
         raise ValueError(
             f"Hydra 训练配置必须位于 sam3 子模块内 (sam3/sam3/train/configs/):\n"
             f"  {path}\n"
-            f"自定义训练请用训练模板 configs/train/template_image.yaml "
+            f"自定义训练请用训练配方 configs/train/example/recipe_image.yaml "
             f"+ configs/models/ 模型配置 (trainer.model 段)"
         )
 
@@ -248,21 +252,21 @@ def _extract_hydra_lines(path: Path) -> List[str]:
 
 
 def materialize_hydra_config(
-    tpl_path: Path,
+    recipe_path: Path,
     net_path: Path,
     net_cfg: Dict[str, Any],
     dataset_blocks: Optional[Dict[str, List[str]]] = None,
 ) -> str:
-    """把训练模板 (configs/train/template_image.yaml) 与模型配置
+    """把训练配方 (configs/train/example/recipe_image.yaml) 与模型配置
     (configs/models/xxx.yaml) 的 ``trainer.model`` 段做文本合并, 落到子模块
-    ``sam3/sam3/train/configs/_custom/<模板文件名>.yaml``, 返回 Hydra config 名。
+    ``sam3/sam3/train/configs/_custom/<配方文件名>.yaml``, 返回 Hydra config 名。
 
     Hydra initialize_config_module 要求配置必须在 sam3.train 模块内, 所以平铺在
     前端的完整训练配置要生成进子模块才能被后端加载。按文本原样搬运 (不经 YAML
     序列化往返), ``${...}`` 插值与注释完全保真; 内容不变时不重写, 避免无意义的
-    mtime 变化。模板里的 ``__MODEL_BLOCK__`` 占位行被替换为模型配置的 model 段;
+    mtime 变化。配方里的 ``__MODEL_BLOCK__`` 占位行被替换为模型配置的 model 段;
     ``__TRAIN_DATASET_BLOCK__`` / ``__VAL_DATASET_BLOCK__`` 占位行 (多数据集时)
-    被替换为 ConcatSam3Datasets 拼接块 (单数据集时不传, 模板默认块原样保留)。
+    被替换为 ConcatSam3Datasets 拼接块 (单数据集时不传, 配方默认块原样保留)。
     """
     if not isinstance(net_cfg.get("hydra"), dict) \
             or not isinstance(net_cfg["hydra"].get("trainer"), dict) \
@@ -286,19 +290,19 @@ def materialize_hydra_config(
             break               # model 段的子键/注释缩进 ≥4; 同级或更浅的键 → 段结束
         block.append(line)
 
-    # ── 模板: __MODEL_BLOCK__ 占位行替换为模型段 ──
-    tpl_lines = _extract_hydra_lines(tpl_path)
+    # ── 配方: __MODEL_BLOCK__ 占位行替换为模型段 ──
+    recipe_lines = _extract_hydra_lines(recipe_path)
     try:
-        slot = next(i for i, line in enumerate(tpl_lines) if "__MODEL_BLOCK__" in line)
+        slot = next(i for i, line in enumerate(recipe_lines) if "__MODEL_BLOCK__" in line)
     except StopIteration:
-        raise ValueError(f"训练模板缺少 __MODEL_BLOCK__ 占位行: {tpl_path}") from None
+        raise ValueError(f"训练配方缺少 __MODEL_BLOCK__ 占位行: {recipe_path}") from None
     # 提取后文本里 trainer 的子键在 2 空格缩进, model 段文本缩进正好匹配, 直接拼接
-    body = tpl_lines[:slot] + block + tpl_lines[slot + 1:]
+    body = recipe_lines[:slot] + block + recipe_lines[slot + 1:]
 
     # ── 多数据集: __TRAIN_DATASET_BLOCK__ / __VAL_DATASET_BLOCK__ 占位替换 ──
     #   dataset_blocks 形如 {"train": [yaml 行...], "val": [yaml 行...]}
     #   (commands/train.py build_dataset_blocks 生成, 已含正确缩进)。单数据集时不
-    #   传, 模板里默认的单 Sam3ImageDataset 块原样保留 → 行为零变化。
+    #   传, 配方里默认的单 Sam3ImageDataset 块原样保留 → 行为零变化。
     if dataset_blocks:
         for marker, ds_block in dataset_blocks.items():
             tag = f"__{marker.upper()}_DATASET_BLOCK__"
@@ -307,14 +311,14 @@ def materialize_hydra_config(
                 (i for i, line in enumerate(body) if tag in line), None)
             if start_idx is None:
                 raise ValueError(
-                    f"训练模板缺少 {tag} 占位行: {tpl_path}")
+                    f"训练配方缺少 {tag} 占位行: {recipe_path}")
             end_idx = next(
                 (i for i in range(start_idx + 1, len(body))
                  if tag_end in body[i]),
                 None)
             if end_idx is None:
                 raise ValueError(
-                    f"训练模板缺少 {tag_end} 占位行: {tpl_path}")
+                    f"训练配方缺少 {tag_end} 占位行: {recipe_path}")
             # 占位块内 (含两个标记行) 整体替换为生成的 yaml 块
             body = body[:start_idx] + ds_block + body[end_idx + 1:]
 
@@ -322,10 +326,10 @@ def materialize_hydra_config(
 
     custom_dir = HYDRA_CONFIG_ROOT / "configs" / "_custom"
     custom_dir.mkdir(parents=True, exist_ok=True)
-    dst = custom_dir / (tpl_path.stem + ".yaml")
+    dst = custom_dir / (recipe_path.stem + ".yaml")
     if not dst.exists() or dst.read_text(encoding="utf-8") != text:
         dst.write_text(text, encoding="utf-8")
-        print(f"已由训练模板+模型配置生成 Hydra 配置: {dst}")
+        print(f"已由训练配方+模型配置生成 Hydra 配置: {dst}")
     return f"configs/_custom/{dst.name}"
 
 
@@ -384,7 +388,7 @@ def build_dataset_overrides(data_config_value: str) -> List[str]:
 
     单数据集格式 (顶层 path/train/val/ann_file) → 返回 scalar overrides, 行为与
     历史一致。多数据集格式 (顶层 ``datasets:`` 列表) → 返回空列表 (改由
-    build_dataset_blocks 生成 yaml 块拼进模板, CLI override 无法表达 list-of-dicts)。
+    build_dataset_blocks 生成 yaml 块拼进配方, CLI override 无法表达 list-of-dicts)。
     """
     ds_path = _resolve_frontend_path(data_config_value, must_exist=True)
     ds = load_yaml_config(str(ds_path)) or {}
@@ -401,7 +405,7 @@ def build_dataset_overrides(data_config_value: str) -> List[str]:
         f'trainer.data.train.dataset.ann_file="{root}/{train_sub}/{ann_file}"',
         f'trainer.data.val.dataset.img_folder="{root}/{val_sub}/"',
         f'trainer.data.val.dataset.ann_file="{root}/{val_sub}/{ann_file}"',
-        # 验证集 COCO 评测的 GT 路径 (模板里是插值, 子目录非默认时会断, 统一覆盖)
+        # 验证集 COCO 评测的 GT 路径 (配方里是插值, 子目录非默认时会断, 统一覆盖)
         f'trainer.meters.val.custom.detection.pred_file_evaluators.0.gt_path="{root}/{val_sub}/{ann_file}"',
     ]
     if f["num_images"] is not None:
@@ -410,7 +414,7 @@ def build_dataset_overrides(data_config_value: str) -> List[str]:
     return overrides
 
 
-# 多数据集 yaml 块: 每个 Sam3ImageDataset 子项共享的字段 (与模板默认块一致)。
+# 多数据集 yaml 块: 每个 Sam3ImageDataset 子项共享的字段 (与配方默认块一致)。
 #   值为 str → ``key: value``; 为 dict → 展开为嵌套块 (key: / 子键)。
 _CONCAT_TRAIN_DS_FIELDS: Dict[str, Any] = {
     "transforms": "${custom_data.train_transforms}",
@@ -420,7 +424,7 @@ _CONCAT_TRAIN_DS_FIELDS: Dict[str, Any] = {
     "max_train_queries": 50000,
     "max_val_queries": 50000,
     "training": "true",
-    "use_caching": "False",
+    "cache_images": "${scratch.cache_images}",
 }
 _CONCAT_VAL_DS_FIELDS: Dict[str, Any] = {
     "load_segmentation": "${scratch.enable_segmentation}",
@@ -434,6 +438,7 @@ _CONCAT_VAL_DS_FIELDS: Dict[str, Any] = {
     "max_ann_per_img": 100000,
     "multiplier": 1,
     "training": "false",
+    "cache_images": "${scratch.cache_images}",
 }
 
 
@@ -447,7 +452,7 @@ def _emit_sam3_dataset_yaml(
     """生成一个 Sam3ImageDataset 子项的 yaml 行 (list item, 以 ``- `` 开头)。
 
     ``indent`` 是 list item ``-`` 所在列; 子键比它多 2 空格。字段值为 dict 时展开
-    为嵌套块 (``key:`` + 缩进 2 的子键), 与模板默认 val 块的 coco_json_loader 一致。
+    为嵌套块 (``key:`` + 缩进 2 的子键), 与配方默认 val 块的 coco_json_loader 一致。
     """
     lines = [f"{indent}- _target_: sam3.train.data.sam3_image_dataset.Sam3ImageDataset"]
     child = indent + "  "  # list item 子键比 ``-`` 多 2 空格
@@ -471,7 +476,7 @@ def build_dataset_blocks(
 ) -> Optional[Dict[str, List[str]]]:
     """多数据集 yaml (顶层 ``datasets:`` 列表) → ConcatSam3Datasets 的 yaml 块文本。
 
-    返回 ``{"train": [yaml 行...], "val": [yaml 行...]}`` (行已含模板要求的缩进,
+    返回 ``{"train": [yaml 行...], "val": [yaml 行...]}`` (行已含配方要求的缩进,
     供 materialize_hydra_config 替换 __TRAIN/VAL_DATASET_BLOCK__ 占位)。单数据集
     yaml 返回 None (走 build_dataset_overrides 的 scalar override 路径)。
     """
@@ -484,7 +489,7 @@ def build_dataset_blocks(
     resolved = [_resolve_dataset_entry(e, ds_path) for e in entries]
 
     # ── train 块: dataset: ConcatSam3Datasets(datasets=[Sam3ImageDataset, ...]) ──
-    #   缩进对齐模板 (提取后, 已去 hydra: 的 2 空格): dataset: 在 6 空格, 其子键 8
+    #   缩进对齐配方 (提取后, 已去 hydra: 的 2 空格): dataset: 在 6 空格, 其子键 8
     #   空格, list item ``-`` 在 8 空格 (与 datasets: 同级)。
     train_lines = [
         "      dataset:",
@@ -523,11 +528,11 @@ def build_hydra_overrides(knobs: Dict[str, Any], escape_hatch: bool = False) -> 
 
     ``++`` 前缀 = 键可能不存在于参考配置中 (image_size 在参考配置的 model 段里
     没有; checkpoint_path/load_from_HF 由 train() 按 model 字段注入), 让 Hydra
-    自动 add-or-override; 其余映射的键都已在模板/参考配置里核实存在, 用普通 ``=``。
+    自动 add-or-override; 其余映射的键都已在配方/参考配置里核实存在, 用普通 ``=``。
     """
     overrides: List[str] = []
 
-    # viz meter 只存在于训练模板 (template_image*.yaml); hydra_config 逃生舱指向
+    # viz meter 只存在于训练配方 (recipe_image*.yaml); hydra_config 逃生舱指向
     # 官方参考配置时没有该键, 普通 override 会报 "key not found" 启动失败
     if escape_hatch and any(
         k.startswith("viz_") and knobs.get(k) is not None for k in TRAIN_KEY_MAP
@@ -612,13 +617,13 @@ def train(config: Dict) -> None:
     net_cfg = load_yaml_config(str(net_path)) or {}
 
     # Hydra 配置来源: 顶层 hydra_config 逃生舱 (--sam3-config) 指向子模块内现成
-    # 配置 (如官方 roboflow 参考配置); 否则用训练模板 (template 字段, 默认
-    # template_image.yaml) + 模型配置的 trainer.model 段, 启动时文本合并
-    # 生成进子模块 configs/_custom/
+    # 配置 (如官方 roboflow 参考配置); 否则用训练配方 (recipe 字段,
+    # 默认 recipe_image.yaml) + 模型配置的 trainer.model 段,
+    # 启动时文本合并生成进子模块 configs/_custom/
     hydra_ref = config.get("hydra_config")
-    tpl_ref: Optional[str] = None
+    recipe_ref: Optional[str] = None
     # 多数据集: 若 data.config 指向的 yaml 是 datasets: 列表, 生成 ConcatSam3Datasets
-    # 块拼进模板 (而非 CLI scalar override); 仅用模板路径时才支持 (hydra_config 逃生
+    # 块拼进配方 (而非 CLI scalar override); 仅用配方路径时才支持 (hydra_config 逃生
     # 舱指向现成配置时不走文本拼接, 多数据集需另配)。单数据集 yaml → build_dataset_blocks
     # 返回 None, 走 build_dataset_overrides 的 scalar override 路径 (向后兼容)。
     dataset_blocks: Optional[Dict[str, List[str]]] = None
@@ -628,10 +633,10 @@ def train(config: Dict) -> None:
     if hydra_ref:
         sam3_config = resolve_hydra_config(str(hydra_ref))
     else:
-        tpl_ref = str(config.get("template") or DEFAULT_TEMPLATE)
-        tpl_path = _resolve_frontend_path(tpl_ref, must_exist=True)
+        recipe_ref = str(config.get("recipe") or DEFAULT_RECIPE)
+        recipe_path = _resolve_frontend_path(recipe_ref, must_exist=True)
         sam3_config = materialize_hydra_config(
-            tpl_path, net_path, net_cfg, dataset_blocks=dataset_blocks)
+            recipe_path, net_path, net_cfg, dataset_blocks=dataset_blocks)
 
     resolution = config.get("resolution")
 
@@ -668,7 +673,7 @@ def train(config: Dict) -> None:
 
     if data_config:
         hydra_overrides += build_dataset_overrides(str(data_config))
-        # 多数据集: dataset 块已拼进模板, 但 meters 段的 gt_path 仍插值
+        # 多数据集: dataset 块已拼进配方, 但 meters 段的 gt_path 仍插值
         # ${paths.dataset_root}/valid/... (多根时 dataset_root 无意义)。指向第一个
         # 数据集的 val 标注, 评测只覆盖它 (best-effort; 多数据集完整评测需后端改造)。
         if dataset_blocks:
@@ -729,8 +734,8 @@ def train(config: Dict) -> None:
     else:
         print(f"模型: HF 官方权重 (自动下载, 微调)")
     print(f"模型配置: {net_ref}")
-    if tpl_ref:
-        print(f"训练模板: {tpl_ref}")
+    if recipe_ref:
+        print(f"训练配方: {recipe_ref}")
     print(f"Hydra config: {sam3_config}")
     if resolution is not None:
         print(f"分辨率: {resolution}")

@@ -27,6 +27,8 @@
 #   数据集带 mask 标注, 用分割训练模板 (template_image_seg.yaml);
 #   分辨率 1008 充分利用 24G 显存, 且与 predict 的 image_size 一致
 #   (finetune_ckpt 要求训练/推理分辨率一致)
+#   A/B 对照: 本配置为 sam3.1 臂 (GPU 4-7), sam3 臂见
+#   highway_road_sam3_finetune.yaml (GPU 0-3), 输出目录独立, 可同时训练
 # ─────────────────────────────────────────────────────────────────────────────
 mode: train
 
@@ -41,10 +43,12 @@ resolution: 1008         # 训练分辨率, 336 的倍数 → scratch.resolution
 # 逃生舱: 直接使用子模块内的现成 Hydra 配置 (绕过训练模板+模型配置), 如官方参考配置
 # hydra_config: sam3/sam3/train/configs/roboflow_v100/roboflow_v100_full_ft_100_images.yaml
 
-# 训练模板: 训练超参数全集 (transforms/loss/优化器等默认值), 一般不用换
-#   template_image_seg.yaml = 分割训练 (数据集带 segmentation)
-#   template_image.yaml     = 纯检测训练 (无 mask 标注的数据集)
-template: configs/train/template_image_seg.yaml
+# 训练配方 (后端配置骨架): transforms/loss/优化器/调度器/评测等全套默认值,
+# 不含模型定义; 启动时与模型配置 (configs/models/) 合并成完整后端配置,
+# 本文件 train: 段的旋钮以 override 形式覆盖其中对应键。按数据集类型二选一:
+#   example/recipe_image_seg.yaml = 分割训练 (数据集带 segmentation)
+#   example/recipe_image.yaml     = 纯检测训练 (无 mask 标注的数据集)
+recipe: configs/train/example/recipe_image_seg.yaml
 
 data:
   config: configs/datasets/highway_road_merged.yaml   # 数据集配置 (独立 YAML)
@@ -52,9 +56,9 @@ data:
 train:
   # ── 资源 ──
   use_cluster: 0        # 0=本地, 1=SLURM 集群
-  num_gpus: 8           # 每节点 GPU 数 (按机器改, 后端默认 1)
+  num_gpus: 4           # 每节点 GPU 数 (按机器改, 后端默认 1)
   num_nodes: 1          # 节点数
-  device: "0,1,2,3,4,5,6,7" # 指定用哪几张卡, 如 "0,1,2,3" (CUDA_VISIBLE_DEVICES); 空=全部可见卡
+  device: "4,5,6,7"     # 指定用哪几张卡, 如 "0,1,2,3" (CUDA_VISIBLE_DEVICES); 空=全部可见卡
   partition:            # SLURM 分区 (仅 use_cluster: 1)
   account:              # SLURM 账户 (仅 use_cluster: 1)
   qos:                  # SLURM QOS (仅 use_cluster: 1)
@@ -157,6 +161,9 @@ train:
   # ── 数据加载 ──
   workers: 10           # 训练 dataloader 进程数 → scratch.num_train_workers (Windows 建议 0)
   val_workers: 8        # 验证 dataloader 进程数 → scratch.num_val_workers
+  cache_images: ram     # none=不缓存 / ram=图片字节读进内存 (内存开销≈数据集体积) / disk=打包成大文件+mmap (多任务共享 page cache) → scratch.cache_images
+  persistent_workers: true  # dataloader worker 跨 epoch 常驻 → scratch.persistent_workers
+  prefetch_factor: 4    # 每个 worker 预取批数 → scratch.prefetch_factor
   max_ann_per_img: 200  # 单图最多标注数 (超出过滤) → scratch.max_ann_per_img
 
   # ── 记录 / 保存 ──
@@ -165,4 +172,4 @@ train:
   skip_saving_ckpts: false  # 是否不存 checkpoint → trainer.skip_saving_ckpts (微调必须 false)
 
 output:
-  path: runs/train/highway_road_sam31_ft    # 实验输出目录 (checkpoints/tensorboard/logs) → paths.experiment_log_dir
+  path: runs/train/highway_road_sam31/202608261    # 实验输出目录 (checkpoints/tensorboard/logs) → paths.experiment_log_dir

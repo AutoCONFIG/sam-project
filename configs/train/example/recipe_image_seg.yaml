@@ -1,20 +1,20 @@
-# SAM 3 训练模板 (图片模型, COCO 分割微调) — 训练超参数全集 [分割变体]
+# SAM 3 训练配方 (图片模型, COCO 分割微调) — 训练超参数全集 [分割变体]
 # ==============================================================
-# 本文件是 template_image.yaml 的分割训练变体: 除 loss/分割开关/训练增强外一致,
-# 已按 template_image.yaml 中 custom_data 末尾的 "4 处联动" 说明开启 mask 训练:
-#   1. scratch.enable_segmentation: true                    ← 本模板已开启
+# 本文件是 recipe_image.yaml 的分割训练变体: 除 loss/分割开关/训练增强外一致,
+# 已按 recipe_image.yaml 中 custom_data 末尾的 "4 处联动" 说明开启 mask 训练:
+#   1. scratch.enable_segmentation: true                    ← 本配方已开启
 #      (联动 trainer.model 建分割头 / 数据集 load_segmentation / collate with_seg_masks)
 #   2. custom_data.loss 已追加 Masks loss 并设置 loss_fn_semantic_seg
 #      (参数取自官方参考配置 roboflow_v100_full_ft_100_images.yaml 的注释块;
-#       注意官方注释里 SemanticSegCriterion 的 _target_ 路径已过时, 本模板用
+#       注意官方注释里 SemanticSegCriterion 的 _target_ 路径已过时, 本配方用
 #       真实路径 sam3.train.loss.loss_fns.SemanticSegCriterion)
 #   3. collate_fn / collate_fn_val 的 with_seg_masks 插值自 enable_segmentation (自动)
 #   4. 前提: COCO json 里有 segmentation (polygon 或 RLE), 且 iscrowd=0
-# 训练入口配置的 template 字段指向本文件即可做分割微调; 纯检测 (无 mask 标注)
-# 的数据集请用 template_image.yaml。
+# 训练入口配置的 recipe 字段指向本文件即可做分割微调; 纯检测 (无 mask 标注)
+# 的数据集请用 recipe_image.yaml。
 #
 # 本文件不是训练入口! 训练入口是 configs/train/custom_finetune.yaml 这类配置
-# (mode: train, 其 template 字段指向本文件)。本文件 = 后端 Hydra 训练配置的
+# (mode: train, 其 recipe 字段指向本文件)。本文件 = 后端 Hydra 训练配置的
 # 完整平铺 (除模型定义): transforms / loss / 优化器 / 调度器 / 评测 / 分布式等
 # 全部默认值在此, 不用去子模块翻后端文件。
 #
@@ -23,13 +23,13 @@
 # sam3/sam3/model_builder.py 的 build_sam3_image_model 代码构建), 模型配置里
 # 只有构建调用与几个构建参数。
 #
-# 启动训练时前端把本模板与模型配置的 trainer.model 段做文本合并, 生成到子模块
-# sam3/sam3/train/configs/_custom/template_image_seg.yaml 再传给后端
+# 启动训练时前端把本配方与模型配置的 trainer.model 段做文本合并, 生成到子模块
+# sam3/sam3/train/configs/_custom/recipe_image_seg.yaml 再传给后端
 # (Hydra initialize_config_module 要求配置必须在 sam3.train 包内; 生成文件勿手改)。
 #
-# 生效优先级: 训练入口 yaml 的旋钮 (train.*) > 本模板。每实验常调项
+# 生效优先级: 训练入口 yaml 的旋钮 (train.*) > 本配方。每实验常调项
 # (batch/epochs/lr/损失权重/早停等, 见 configs/train/README.md 旋钮清单) 都在
-# 入口 yaml 里; 长尾参数 (transforms 细节/o2m_matcher/评测器等) 直接改本模板。
+# 入口 yaml 里; 长尾参数 (transforms 细节/o2m_matcher/评测器等) 直接改本配方。
 #
 # 数据集布局 (Roboflow COCO 导出格式):
 #   <dataset_root>/
@@ -190,7 +190,7 @@ hydra:
   # 辅助参数
   # ============================================================================
   scratch:
-    enable_segmentation: True   # 本模板 = 分割训练 (纯检测请用 template_image.yaml)
+    enable_segmentation: True   # 本配方 = 分割训练 (纯检测请用 recipe_image.yaml)
     # d_model/pos_embed 为上游遗留: 本配置树未引用 (网络结构由 build_sam3_image_model
     # 代码构建), 保留仅与官方参考配置对齐
     d_model: 256
@@ -231,6 +231,9 @@ hydra:
 
     num_train_workers: 10   # Windows 上建议用 overrides 改为 0
     num_val_workers: 0
+    cache_images: none      # none=不缓存 / ram=图片字节读进内存 / disk=打包成大文件+mmap (多任务共享 page cache)
+    persistent_workers: true  # dataloader worker 跨 epoch 常驻 (要求 transforms 不依赖 epoch 调度)
+    prefetch_factor: 4      # 每个 worker 预取的批数 (仅 num_workers>0 生效)
     max_data_epochs: 20
     target_epoch_size: 1500
     hybrid_repeats: 1
@@ -319,7 +322,7 @@ hydra:
           max_train_queries: 50000
           max_val_queries: 50000
           training: true
-          use_caching: False
+          cache_images: ${scratch.cache_images}
           img_folder: ${paths.dataset_root}/train/
           ann_file: ${paths.dataset_root}/train/_annotations.coco.json
         # __TRAIN_DATASET_BLOCK_END__
@@ -329,6 +332,8 @@ hydra:
         pin_memory: True
         drop_last: True
         collate_fn: ${scratch.collate_fn}
+        persistent_workers: ${scratch.persistent_workers}
+        prefetch_factor: ${scratch.prefetch_factor}
 
       val:
         _target_: sam3.train.data.torch_dataset.TorchDataset
@@ -348,6 +353,7 @@ hydra:
           max_ann_per_img: 100000
           multiplier: 1
           training: false
+          cache_images: ${scratch.cache_images}
         # __VAL_DATASET_BLOCK_END__
         shuffle: False
         batch_size: ${scratch.val_batch_size}
@@ -355,6 +361,8 @@ hydra:
         pin_memory: True
         drop_last: False
         collate_fn: ${scratch.collate_fn_val}
+        persistent_workers: ${scratch.persistent_workers}
+        prefetch_factor: ${scratch.prefetch_factor}
 
     # __MODEL_BLOCK__ 占位: 由模型配置的 trainer.model 段注入 (见 commands/train.py materialize_hydra_config)
 

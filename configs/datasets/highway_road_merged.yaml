@@ -6,8 +6,8 @@
 # 重新生成: python tools/merge_highway_coco_dedup.py)
 # 3 类 (类别名即 SAM3 文本 prompt):
 #   highway up direction, highway down direction, road isolation zone
-# 注: 类别多为道路区域 (stuff 类) 且带 mask 标注, 分割微调请配合分割训练模板
-#     configs/train/template_image_seg.yaml (见 configs/train/README.md)
+# 注: 类别多为道路区域 (stuff 类) 且带 mask 标注, 分割微调请配合分割训练配方
+#     configs/train/example/recipe_image_seg.yaml (见 configs/train/README.md)
 #
 # 数据集布局:
 #   <path>/
@@ -16,8 +16,8 @@
 # COCO categories[].name 即文本 prompt (开放词表检测的训练信号)。
 #
 # 注意: 数据集注入依赖 Hydra 配置里的标准键 (paths.dataset_root /
-# trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合训练模板
-# configs/train/template_image*.yaml 使用 (含这些键); 直接用后端自带配置
+# trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合训练配方
+# configs/train/example/recipe_image*.yaml 使用 (含这些键); 直接用后端自带配置
 # (hydra_config 逃生舱, 如 roboflow_v100) 时键名不同不支持注入, 数据路径
 # 在那些配置自己的 paths 段里改。
 

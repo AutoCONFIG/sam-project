@@ -20,7 +20,7 @@
     - 训练配置的 num_gpus/device 与实际可见 GPU 数是否匹配
 
 用法:
-  python tools/check_env.py                                # 默认检查 highway_road_finetune.yaml
+  python tools/check_env.py                                # 默认检查 highway_road_sam3_finetune.yaml
   python tools/check_env.py configs/train/custom_finetune.yaml
 """
 
@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_TRAIN_CONFIG = PROJECT_ROOT / "configs/train/highway_road_finetune.yaml"
+DEFAULT_TRAIN_CONFIG = PROJECT_ROOT / "configs/train/highway_road_sam3_finetune.yaml"
 
 # ── 输出 ──────────────────────────────────────────────────────────────────
 if sys.stdout.isatty():

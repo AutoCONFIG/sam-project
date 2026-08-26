@@ -2,7 +2,7 @@
 # ============================================================================
 # 把 yolo_seg_to_coco.py 批量转换出的 17 个子数据集一把全训: 前端 commands/train.py
 # 检测到顶层 datasets: 列表时, 生成 ConcatSam3Datasets(datasets=[Sam3ImageDataset, ...])
-# 块拼进训练模板 (而非 CLI scalar override, 后者无法表达 list-of-dicts)。
+# 块拼进训练配方 (而非 CLI scalar override, 后者无法表达 list-of-dicts)。
 #
 # 格式: 顶层 datasets: 列表, 每条描述一个 Roboflow COCO 布局的子数据集:
 #   <path>/<train>/_annotations.coco.json

@@ -115,28 +115,28 @@ sam-project/
 - CLI 参数透传（`--num-gpus`, `--use-cluster`, `--partition`, `--account`, `--qos`, `--num-nodes`）
 - SAM3 Hydra 训练脚本存在，依赖已安装（hydra 1.3.5, submitit）
 - 15+ 个 Hydra 训练配置文件存在于 `sam3/sam3/train/configs/`（roboflow_v100, odinw13, saco_video_evals 等）
-- ✅ 前端训练配置分区为 `model`（标量多态：权重 `.pt`=预训练微调（默认模型配置 `configs/models/sam3_image.yaml`）/ 模型配置 `.yaml`=从头训练 / `hf` 或缺省=HF 下载微调）+ 顶层 `resolution` / `data`（`config` 引用独立数据集 YAML）/ `train`（资源与旋钮）/ `output`（`path` → `paths.experiment_log_dir`）/ `template`（训练模板，默认 `configs/train/template_image.yaml`）；顶层 `hydra_config` 为指向子模块现成配置的逃生舱，示例 `configs/train/custom_finetune.yaml`
-- ✅ 配置三层拆分（2026-08-20）：**训练模板** `configs/train/template_image.yaml` = 后端 Hydra 配置全量默认值（transforms/loss/优化器/调度器/评测/分布式，即全部训练超参数）；**模型配置** `configs/models/sam3_image.yaml` 瘦身只剩 `trainer.model` 构建调用——本后端网络结构由 `build_sam3_image_model` 代码硬编码，yaml 本无网络结构可配（`scratch.d_model`/`pos_embed` 为上游遗留死配置，配置树无引用，模板里已注明）；物化 = 模板文本 + 模型配置 `trainer.model` 段在 `__MODEL_BLOCK__` 占位处合并（`commands/train.py: materialize_hydra_config`）
-- ✅ 数据集配置独立成 `configs/datasets/*.yaml`（path/train/val/ann_file/num_images），前端翻译为 `paths.dataset_root` + `trainer.data.{train,val}.dataset.{img_folder,ann_file}` + 验证 GT 路径等 override；依赖模板标准键，配合训练模板 `configs/train/template_image.yaml` 使用（含这些键）
+- ✅ 前端训练配置分区为 `model`（标量多态：权重 `.pt`=预训练微调（默认模型配置 `configs/models/sam3_image.yaml`）/ 模型配置 `.yaml`=从头训练 / `hf` 或缺省=HF 下载微调）+ 顶层 `resolution` / `data`（`config` 引用独立数据集 YAML）/ `train`（资源与旋钮）/ `output`（`path` → `paths.experiment_log_dir`）/ `recipe`（训练配方，默认 `configs/train/example/recipe_image.yaml`）；顶层 `hydra_config` 为指向子模块现成配置的逃生舱，示例 `configs/train/custom_finetune.yaml`
+- ✅ 配置三层拆分（2026-08-20）：**训练配方** `configs/train/example/recipe_image.yaml` = 后端 Hydra 配置全量默认值（transforms/loss/优化器/调度器/评测/分布式，即全部训练超参数）；**模型配置** `configs/models/sam3_image.yaml` 瘦身只剩 `trainer.model` 构建调用——本后端网络结构由 `build_sam3_image_model` 代码硬编码，yaml 本无网络结构可配（`scratch.d_model`/`pos_embed` 为上游遗留死配置，配置树无引用，配方里已注明）；物化 = 配方文本 + 模型配置 `trainer.model` 段在 `__MODEL_BLOCK__` 占位处合并（`commands/train.py: materialize_hydra_config`）
+- ✅ 数据集配置独立成 `configs/datasets/*.yaml`（path/train/val/ann_file/num_images），前端翻译为 `paths.dataset_root` + `trainer.data.{train,val}.dataset.{img_folder,ann_file}` + 验证 GT 路径等 override；依赖配方标准键，配合训练配方 `configs/train/example/recipe_image.yaml` 使用（含这些键）
 - ✅ `paths.bpe_path` 自动注入子模块内绝对路径，无需手配
-- ✅ 训练旋钮全量前端直配（37 个，均映射到后端配置里逐一核实存在的键，默认值与后端一致，删掉/留空即不改）：batch/epochs/lr_scale/weight_decay/lrd/scheduler_timescale/scheduler_warmup/scheduler_cooldown/grad_accum/grad_clip/amp/amp_dtype/val_freq/skip_first_val/val_batch/early_stop/early_stop_patience/workers/val_workers/max_ann_per_img/save_freq/log_freq/skip_saving_ckpts/seed/timeout_hour/cpus_per_task + 损失权重/匹配器成本 11 个：loss_bbox/loss_giou/loss_ce/presence_loss/pos_weight/focal_alpha/focal_gamma/o2m_weight/matcher_cost_class/matcher_cost_bbox/matcher_cost_giou（映射表 `commands/train.py: TRAIN_KEY_MAP`；loss 权重覆盖 `custom_data.loss` 源——经插值进 `trainer.loss.all` 无法从 trainer 侧覆盖，`loss_fns_find` 列表顺序固定 0=Boxes 1=IABCEMdetr；`hydra_config` 逃生舱指向官方参考配置时前缀自动换为 `roboflow_train`，结构相同）；长尾参数直接编辑训练模板 `configs/train/template_image.yaml`
+- ✅ 训练旋钮全量前端直配（37 个，均映射到后端配置里逐一核实存在的键，默认值与后端一致，删掉/留空即不改）：batch/epochs/lr_scale/weight_decay/lrd/scheduler_timescale/scheduler_warmup/scheduler_cooldown/grad_accum/grad_clip/amp/amp_dtype/val_freq/skip_first_val/val_batch/early_stop/early_stop_patience/workers/val_workers/max_ann_per_img/save_freq/log_freq/skip_saving_ckpts/seed/timeout_hour/cpus_per_task + 损失权重/匹配器成本 11 个：loss_bbox/loss_giou/loss_ce/presence_loss/pos_weight/focal_alpha/focal_gamma/o2m_weight/matcher_cost_class/matcher_cost_bbox/matcher_cost_giou（映射表 `commands/train.py: TRAIN_KEY_MAP`；loss 权重覆盖 `custom_data.loss` 源——经插值进 `trainer.loss.all` 无法从 trainer 侧覆盖，`loss_fns_find` 列表顺序固定 0=Boxes 1=IABCEMdetr；`hydra_config` 逃生舱指向官方参考配置时前缀自动换为 `roboflow_train`，结构相同）；长尾参数直接编辑训练配方 `configs/train/example/recipe_image.yaml`
 - ✅ subprocess 透传 `PYTHONPATH=<sam3 子模块>`，未 `pip install -e sam3` 也能 import
 - ✅ `build_sam3_image_model(image_size=...)` 训练链路分辨率参数化（须为 336 倍数）
-- ✅ 早停与真冻结（2026-08-20，后端 `trainer.py` 最小新增）：`trainer.early_stop`（enabled/patience/metric/mode/min_delta，按验证次数计，rank 0 判定 + broadcast；指标键后缀匹配，找不到只警告不误停）与 `trainer.freeze`（unix pattern 真冻结 `requires_grad=False`——不算梯度/不进优化器（经 `construct_optimizer` 的 `param_allowlist` 排除）/DDP 不同步，比 lr=0 省算力省显存）；默认值在训练模板 `configs/train/template_image.yaml` 的 trainer 节，开关与 patience 有前端旋钮
+- ✅ 早停与真冻结（2026-08-20，后端 `trainer.py` 最小新增）：`trainer.early_stop`（enabled/patience/metric/mode/min_delta，按验证次数计，rank 0 判定 + broadcast；指标键后缀匹配，找不到只警告不误停）与 `trainer.freeze`（unix pattern 真冻结 `requires_grad=False`——不算梯度/不进优化器（经 `construct_optimizer` 的 `param_allowlist` 排除）/DDP 不同步，比 lr=0 省算力省显存）；默认值在训练配方 `configs/train/example/recipe_image.yaml` 的 trainer 节，开关与 patience 有前端旋钮
 
 **提交与验证记录（2026-08-20）：**
 - 子模块 `9beb10a`：trainer.py 早停 + 真冻结
-- 主仓库 `20fa746`：训练模板拆分（template_image.yaml / models 瘦身 / `__MODEL_BLOCK__` 文本合并）+ 损失权重与匹配器 11 旋钮 + 早停/冻结前端接入
-- 验证方式：开发机无 Python，仅静态验证——awk 模拟模板合并流程、生成配置与 HEAD 语义 diff（逐键一致，仅多 freeze/early_stop 7 行）、逐行走读 diff；静态走读曾抓到并修复 2 个合并逻辑 bug（块提取首行误 break、缩进多加一层）
-- 未实测项（待真机首跑确认）：hydra 列表索引覆盖语法（`custom_data.loss.loss_fns_find.0.weight_dict.*`）、`++trainer.early_stop.*` add-or-override、trainer.py 早停/冻结运行时行为、模板合并端到端
+- 主仓库 `20fa746`：训练配方拆分（recipe_image.yaml / models 瘦身 / `__MODEL_BLOCK__` 文本合并）+ 损失权重与匹配器 11 旋钮 + 早停/冻结前端接入
+- 验证方式：开发机无 Python，仅静态验证——awk 模拟配方合并流程、生成配置与 HEAD 语义 diff（逐键一致，仅多 freeze/early_stop 7 行）、逐行走读 diff；静态走读曾抓到并修复 2 个合并逻辑 bug（块提取首行误 break、缩进多加一层）
+- 未实测项（待真机首跑确认）：hydra 列表索引覆盖语法（`custom_data.loss.loss_fns_find.0.weight_dict.*`）、`++trainer.early_stop.*` add-or-override、trainer.py 早停/冻结运行时行为、配方合并端到端
 
 **后端机制备忘（2026-08-19 代码走读确认）：**
-- 后端 `-c` 是 Hydra config 名，相对于 `sam3/sam3/train/`（`initialize_config_module` 限制，配置必须在子模块内）；前端已屏蔽此细节——训练模板与模型配置的 `trainer.model` 段在启动时文本合并生成到子模块 `configs/_custom/<模板文件名>.yaml`（自动管理，内容不变不重写，勿手改）；训练配置顶层 `hydra_config` 字段（或 CLI `--sam3-config`）为指向子模块内现成配置（如官方 roboflow 参考配置）的逃生舱
+- 后端 `-c` 是 Hydra config 名，相对于 `sam3/sam3/train/`（`initialize_config_module` 限制，配置必须在子模块内）；前端已屏蔽此细节——训练配方与模型配置的 `trainer.model` 段在启动时文本合并生成到子模块 `configs/_custom/<配方文件名>.yaml`（自动管理，内容不变不重写，勿手改）；训练配置顶层 `hydra_config` 字段（或 CLI `--sam3-config`）为指向子模块内现成配置（如官方 roboflow 参考配置）的逃生舱
 - 参考配置默认 `submitit.use_cluster: True`（本地必须显式 `--use-cluster 0`）且 `trainer.skip_saving_ckpts: true`（微调必须改 false，否则不存 checkpoint）
 - 预训练权重：后端 `build_sam3_image_model(checkpoint_path=None, load_from_HF=True)`——`checkpoint_path` 优先，为 None 且 `load_from_HF=True` 时从 HF 下载 sam3 原版（gated repo 需 token），两者都空 = 从头训练；前端 `model` 字段：指 `.pt` → 注入 `++trainer.model.checkpoint_path`，指模型配置 yaml → 注入 `++trainer.model.load_from_HF=false`，`hf`/缺省 → 不注入
 - 数据格式为 COCO（img_folder + `_annotations.coco.json`），文本 prompt = `categories[].name`；只支持图片级训练（video dataset 类存在但无训练配置）
 - odinw 配置里的 `freeze_*` / `use_act_checkpoint_*` 键无代码消费，是死配置——官方开箱只有全量微调；真冻结与早停由本 fork 在 `trainer.py` 新增（见第 5 节）
-- 前端注入的所有 Hydra 覆盖（旋钮/数据集/权重路径等）都作为尾随参数传给后端 `train.py`（fork 已改 `parse_known_args` 收集 + `compose(overrides=)`）；键在参考配置里不存在的用 `++` 前缀（前端已自动处理）；用户侧长尾参数直接编辑训练模板，不提供透传字段
+- 前端注入的所有 Hydra 覆盖（旋钮/数据集/权重路径等）都作为尾随参数传给后端 `train.py`（fork 已改 `parse_known_args` 收集 + `compose(overrides=)`）；键在参考配置里不存在的用 `++` 前缀（前端已自动处理）；用户侧长尾参数直接编辑训练配方，不提供透传字段
 
 **缺失项：**
 - ❌ **没有实际跑通过训练**：只是 subprocess 转发，未验证端到端
@@ -196,7 +196,7 @@ fork 的 main 分支包含以下修改（commit `bfa05a7`）：
    - `_apply_freeze()`：unix pattern 匹配参数名 → `requires_grad_(False)`（在 `_construct_optimizers` 之前调用）；冻结参数经 `construct_optimizer(param_allowlist=...)` 排除出优化器（不分配 AdamW 状态），此时跳过全参数覆盖校验
    - `_check_early_stop()` / `_early_stop_decision()`：`run_val` 返回验证指标 dict，`run_train` 在每次中间验证后判定；rank 0 判定 + `dist.broadcast_object_list` 广播；指标键按 精确→后缀→唯一子串 匹配，找不到只警告一次不早停
 
-7. **`.gitignore`** — 忽略 `sam3/train/configs/_custom/`（前端启动训练时由训练模板 `configs/train/template_image.yaml` + 模型配置自动合并生成的 Hydra 配置目录）；原自定义模板 `custom_image_ft.yaml` 已移出子模块，完整平铺在主仓库训练模板里（相对 roboflow 参考配置：`skip_saving_ckpts: false`、`use_cluster: False`、无 job_array、`paths.dataset_root` 由前端数据集 YAML 注入）
+7. **`.gitignore`** — 忽略 `sam3/train/configs/_custom/`（前端启动训练时由训练配方 `configs/train/example/recipe_image.yaml` + 模型配置自动合并生成的 Hydra 配置目录）；原自定义配方 `custom_image_ft.yaml` 已移出子模块，完整平铺在主仓库训练配方里（相对 roboflow 参考配置：`skip_saving_ckpts: false`、`use_cluster: False`、无 job_array、`paths.dataset_root` 由前端数据集 YAML 注入）
 
 ## 6. 环境信息
 
@@ -235,7 +235,7 @@ SAM3 和 SAM3.1 是**同一模型的版本迭代**（不是不同任务）：
 1. **推理端到端验证** — 用 sam3.1 + 672 跑通重构后的 predict（输出形态跟随 + 标签导出）
 2. **训练实际跑通验证** — 用 SAM3 自带的 roboflow 配置试跑（需下载数据集）
 3. **微调工作流封装** — 预训练权重加载 → 自定义数据 fine-tune → checkpoint 保存
-4. ~~训练配置模板~~（已完成：三层拆分——训练模板 `configs/train/template_image.yaml` 平铺全部训练超参数 + 模型配置 `configs/models/sam3_image.yaml` 只含 `trainer.model`，启动时文本合并生成进子模块 `configs/_custom/`；+ 独立 `configs/datasets/`）
+4. ~~训练配置配方~~（已完成：三层拆分——训练配方 `configs/train/example/recipe_image.yaml` 平铺全部训练超参数 + 模型配置 `configs/models/sam3_image.yaml` 只含 `trainer.model`，启动时文本合并生成进子模块 `configs/_custom/`；+ 独立 `configs/datasets/`）
 5. **点/框提示推理** — predict 命令增加 `--points`/`--boxes` 参数
 6. ~~checkpoint 管理~~（已完成：predict `model.finetune_ckpt` → detector 运行时加载，见 3.3 缺失项）
 7. **Windows 推理+ONNX 导出评估** — 评估 Win 下能否跑推理和导出（基本开发用，重活留 Linux）

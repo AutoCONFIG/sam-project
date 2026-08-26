@@ -3,9 +3,9 @@
 #
 # 配置按用途分成独立 YAML (参照 yolo-project 的分离模式):
 #   configs/train/xxx.yaml            — 训练入口配置 (本目录), mode: train, 由 sam.py 读取
-#   configs/train/template_image.yaml — 训练模板: 训练超参数全集 (transforms/loss/优化器
-#                                       /调度器/评测/分布式默认值), 由入口配置的 template 字段引用
-#   configs/train/template_image_seg.yaml — 分割训练模板 (上述模板的分割变体, 已开启
+#   configs/train/example/recipe_image.yaml — 训练配方: 训练超参数全集 (transforms/loss/优化器
+#                                       /调度器/评测/分布式默认值), 由入口配置的 recipe 字段引用
+#   configs/train/example/recipe_image_seg.yaml — 分割训练配方 (上述配方的分割变体, 已开启
 #                                       mask loss; 数据集 COCO json 需带 segmentation)
 #   configs/models/xxx.yaml           — 模型配置 (只定义模型构建 trainer.model; 网络结构在
 #                                       后端代码 build_sam3_image_model 里), 由 model 字段引用
@@ -13,13 +13,13 @@
 #   configs/export/xxx.yaml           — ONNX 导出配置, mode: export (独立命令, 见 configs/export/)
 #
 # 训练涉及三层前端配置:
-#   1. 训练入口 (本目录 xxx.yaml): model / resolution / data / train 旋钮 / output / template
-#   2. 训练模板 (template_image.yaml): 后端 Hydra 配置全量默认值 (除模型定义),
+#   1. 训练入口 (本目录 xxx.yaml): model / resolution / data / train 旋钮 / output / recipe
+#   2. 训练配方 (recipe_image.yaml): 后端 Hydra 配置全量默认值 (除模型定义),
 #      未做成旋钮的长尾参数直接改这里
 #   3. 模型配置 (configs/models/sam3_image.yaml): 只有 trainer.model 构建调用
 #      (本后端网络结构由代码构建, yaml 不可配)
-# 启动训练时前端把模板与模型配置的 trainer.model 段文本合并, 生成到子模块
-# sam3/sam3/train/configs/_custom/<模板文件名>.yaml 再传给后端
+# 启动训练时前端把配方与模型配置的 trainer.model 段文本合并, 生成到子模块
+# sam3/sam3/train/configs/_custom/<配方文件名>.yaml 再传给后端
 # (Hydra initialize_config_module 要求配置必须在 sam3.train 包内,
 #  见 sam3/sam3/train/train.py; 生成文件勿手改)
 #
@@ -39,7 +39,7 @@
 # model: pretrain/sam3/sam3.pt   # 权重 .pt=微调 / 模型配置 .yaml=从头训练 / hf 或不写=HF 下载微调
 # resolution: 1008               # 训练分辨率, 336 的倍数
 # # hydra_config: sam3/sam3/train/configs/...   # 逃生舱: 直接用子模块内现成配置
-# template: configs/train/template_image.yaml   # 训练模板 (超参数全集), 可省略
+# recipe: configs/train/example/recipe_image.yaml   # 训练配方 (超参数全集), 可省略
 # data:
 #   config: configs/datasets/roboflow_vl_100.yaml   # 数据集配置 (独立 YAML, 见 configs/datasets/)
 # train:
@@ -102,15 +102,15 @@
 #
 # 说明:
 #   - 上面 train.* 的每个旋钮都映射到后端配置里确认存在的键 (已对照官方 roboflow
-#     参考配置与训练模板 template_image.yaml 逐一核实); 未列出的长尾参数直接编辑
-#     训练模板 (那里是完整平铺的全部训练配置)
+#     参考配置与训练配方 recipe_image.yaml 逐一核实); 未列出的长尾参数直接编辑
+#     训练配方 (那里是完整平铺的全部训练配置)
 #   - 损失权重旋钮覆盖的是 custom_data.loss 源 (经插值进 trainer.loss.all, 无法从
 #     trainer 侧覆盖); 用 hydra_config 逃生舱时自动改指 roboflow_train.loss
 #     (官方参考配置段名不同, 结构相同)
 #   - paths.bpe_path 由前端自动注入为子模块内绝对路径, 不用配
 #   - data.config 的数据集注入依赖标准 Hydra 键 (paths.dataset_root /
-#     trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合训练模板
-#     template_image.yaml 使用 (含这些键); 直接用后端自带配置时数据路径在其
+#     trainer.data.{train,val}.dataset.{img_folder,ann_file}), 请配合训练配方
+#     recipe_image.yaml 使用 (含这些键); 直接用后端自带配置时数据路径在其
 #     paths 段里改
 #
 # 运行:
@@ -126,7 +126,7 @@
 # 重要提醒 (后端参考配置的默认值是 Meta 为集群评测设计的, 直接用会踩坑):
 #   1. 参考配置 submitit.use_cluster 默认 True —— 本地训练必须在前端 YAML 显式 use_cluster: 0
 #   2. 参考配置 trainer.skip_saving_ckpts 默认 true —— 微调前务必显式 skip_saving_ckpts: false,
-#      否则不存 checkpoint (训练模板 template_image.yaml 已设为 false)
+#      否则不存 checkpoint (训练配方 recipe_image.yaml 已设为 false)
 #   3. model 不写或写 hf 则默认 load_from_HF=True, 自动从 HuggingFace 下载 sam3 原版权重
 #      (gated repo 需 token), 建议显式指向本地 .pt
 #   4. 数据格式: COCO (img_folder + _annotations.coco.json), 类别 name 即文本 prompt
