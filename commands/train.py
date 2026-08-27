@@ -106,7 +106,7 @@ TRAIN_KEY_MAP = {
     "workers": "scratch.num_train_workers",
     "val_workers": "scratch.num_val_workers",
     # 用 ++ 前缀: hydra_config 逃生舱指向官方参考配置时没有这些 scratch 键
-    "cache_images": "++scratch.cache_images",          # none=不缓存 / ram=内存缓存 / disk=打包大文件+mmap
+    "cache_images": "++scratch.cache_images",          # none=不缓存 / disk=打包大文件+mmap
     "persistent_workers": "++scratch.persistent_workers",  # worker 跨 epoch 常驻
     "prefetch_factor": "++scratch.prefetch_factor",    # 每 worker 预取批数
     "max_ann_per_img": "scratch.max_ann_per_img",   # 单图最多标注数 (超出过滤)
@@ -121,6 +121,7 @@ TRAIN_KEY_MAP = {
     "viz_score_threshold": "trainer.meters.val.custom.viz.score_threshold",
     "viz_min_per_img": "trainer.meters.val.custom.viz.min_per_img",
     "viz_max_per_img": "trainer.meters.val.custom.viz.max_per_img",
+    "viz_iou_threshold": "trainer.meters.val.custom.viz.iou_threshold",
     # ── 损失权重 / 匹配器成本 ──
     # loss 段源在 custom_data.loss (经插值 ${custom_data.loss} 进 trainer.loss.all,
     # 无法从 trainer 侧覆盖, 必须覆盖源); loss_fns_find 列表顺序固定: 0=Boxes 1=IABCEMdetr;

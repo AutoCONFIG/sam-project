@@ -51,9 +51,9 @@ data:
 train:
   # ── 资源 ──
   use_cluster: 0        # 0=本地, 1=SLURM 集群
-  num_gpus: 4           # 每节点 GPU 数 (按机器改, 后端默认 1)
+  num_gpus: 8           # 每节点 GPU 数 (按机器改, 后端默认 1)
   num_nodes: 1          # 节点数
-  device: "0,1,2,3"     # 指定用哪几张卡, 如 "0,1,2,3" (CUDA_VISIBLE_DEVICES); 空=全部可见卡
+  device: "0,1,2,3,4,5,6,7"     # 指定用哪几张卡, 如 "0,1,2,3" (CUDA_VISIBLE_DEVICES); 空=全部可见卡
   partition:            # SLURM 分区 (仅 use_cluster: 1)
   account:              # SLURM 账户 (仅 use_cluster: 1)
   qos:                  # SLURM QOS (仅 use_cluster: 1)
@@ -132,13 +132,14 @@ train:
   early_stop_patience: 20  # 连续 N 次验证无改进即停 → trainer.early_stop.patience
 
   # ── 验证可视化 (每轮验证结束把验证集 GT/预测拼成马赛克存实验根目录 val_batch*_labels/pred.jpg;
-  #    纯 mask 无检测框, 标签带置信度; 异步渲染不阻塞训练; 只影响出图, 不影响训练与 mAP;
-  #    置信度 = 分类×presence, SAM3 为 query 架构无 NMS/IoU 阈值) ──
+  #    检测框 + mask 半透明叠加, 标签带置信度; 异步渲染不阻塞训练; 只影响出图, 不影响训练与 mAP;
+  #    置信度 = 分类×presence; NMS 去重仅可视化用, 后端评测为 query 架构匈牙利匹配无 NMS) ──
   viz_max_files: 3          # 每轮验证出几张马赛克 → trainer.meters.val.custom.viz.max_files
   viz_per_file: 16          # 每张马赛克拼几张验证图 → ...viz.per_file
   viz_score_threshold: 0.7  # 预测置信度阈值 → ...viz.score_threshold
-  viz_min_per_img: 3        # 全部低于阈值时仍显示 top-N (训练初期分数低, 防空图) → ...viz.min_per_img
-  viz_max_per_img: 5        # 每个 (图, 类别) 最多画几条预测 (防杂乱) → ...viz.max_per_img
+  viz_min_per_img: 1        # 全部低于阈值时仍显示 top-N (训练初期分数低, 防空图) → ...viz.min_per_img
+  viz_max_per_img: 15        # 每个 (图, 类别) 最多画几条预测 (防杂乱) → ...viz.max_per_img
+  viz_iou_threshold: 0.5    # NMS 去重 IoU 阈值 (仅可视化, 去 query 冗余框; 0=关闭) → ...viz.iou_threshold
 
   # ── 损失权重 / 匹配器成本 (默认=官方值; 一般不用动, 明确知道问题再调, 如小目标多可抬 loss_giou) ──
   loss_bbox: 5.0        # 框 L1 损失权重 → loss...Boxes.weight_dict.loss_bbox
@@ -154,9 +155,9 @@ train:
   matcher_cost_giou: 2.0   # 匈牙利匹配 GIoU 成本 → scratch.matcher.cost_giou
 
   # ── 数据加载 ──
-  workers: 10           # 训练 dataloader 进程数 → scratch.num_train_workers (Windows 建议 0)
-  val_workers: 8        # 验证 dataloader 进程数 → scratch.num_val_workers
-  cache_images: ram     # none=不缓存 / ram=图片字节读进内存 (内存开销≈数据集体积) / disk=打包成大文件+mmap (多任务共享 page cache) → scratch.cache_images
+  workers: 4            # 训练 dataloader 进程数 → scratch.num_train_workers (Windows 建议 0); disk 缓存后 Data Time≈0, 4 个够用
+  val_workers: 2        # 验证 dataloader 进程数 → scratch.num_val_workers
+  cache_images: disk    # none=不缓存 / disk=打包成大文件+mmap (多任务共享 page cache, 不占常驻内存) → scratch.cache_images
   persistent_workers: true  # dataloader worker 跨 epoch 常驻 → scratch.persistent_workers
   prefetch_factor: 4    # 每个 worker 预取批数 → scratch.prefetch_factor
   max_ann_per_img: 200  # 单图最多标注数 (超出过滤) → scratch.max_ann_per_img

@@ -124,13 +124,14 @@ train:
   early_stop_patience: 5  # 连续 N 次验证无改进即停 → trainer.early_stop.patience
 
   # ── 验证可视化 (每轮验证结束把验证集 GT/预测拼成马赛克存实验根目录 val_batch*_labels/pred.jpg;
-  #    纯 mask 无检测框, 标签带置信度; 异步渲染不阻塞训练; 只影响出图, 不影响训练与 mAP;
-  #    置信度 = 分类×presence, SAM3 为 query 架构无 NMS/IoU 阈值) ──
+  #    检测框 + mask 半透明叠加, 标签带置信度; 异步渲染不阻塞训练; 只影响出图, 不影响训练与 mAP;
+  #    置信度 = 分类×presence; NMS 去重仅可视化用, 后端评测为 query 架构匈牙利匹配无 NMS) ──
   viz_max_files: 3          # 每轮验证出几张马赛克 → trainer.meters.val.custom.viz.max_files
   viz_per_file: 16          # 每张马赛克拼几张验证图 → ...viz.per_file
   viz_score_threshold: 0.1  # 预测置信度阈值 → ...viz.score_threshold
   viz_min_per_img: 3        # 全部低于阈值时仍显示 top-N (训练初期分数低, 防空图) → ...viz.min_per_img
   viz_max_per_img: 5        # 每个 (图, 类别) 最多画几条预测 (防杂乱) → ...viz.max_per_img
+  viz_iou_threshold: 0.5    # NMS 去重 IoU 阈值 (仅可视化, 去 query 冗余框; 0=关闭) → ...viz.iou_threshold
 
   # ── 损失权重 / 匹配器成本 (默认=官方值; 一般不用动, 明确知道问题再调, 如小目标多可抬 loss_giou) ──
   loss_bbox: 5.0        # 框 L1 损失权重 → loss...Boxes.weight_dict.loss_bbox
