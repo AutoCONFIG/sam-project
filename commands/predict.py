@@ -105,6 +105,14 @@ Examples:
     parser.add_argument("--multiplex-count", type=int, default=None,
                         help=f"每个 multiplex 桶的对象容量 (仅 sam3.1, 默认 {DEFAULT_MULTIPLEX_COUNT}; 结构参数, 与预训练权重绑定, 勿改)")
 
+    # ── 检测后处理阈值 (原后端硬编码, 现可调) ──
+    parser.add_argument("--score-threshold", type=float, default=None,
+                        help="检测置信度阈值 (sam3.1 默认 0.4, sam3 默认 0.5; 调低→更多检测, 调高→更精准)")
+    parser.add_argument("--nms-thresh", type=float, default=None,
+                        help="检测 NMS IoU 阈值 (默认 0.1; 调高→保留更多重叠框, 调低→去重更激进)")
+    parser.add_argument("--new-det-thresh", type=float, default=None,
+                        help="新对象确认阈值 (sam3.1 默认 0.65, sam3 默认 0.7; 跟踪中新增对象需达此分数)")
+
     set_boolean_argument(parser, "use_fa3", "use-fa3",
                          help_true="使用 Flash Attention 3 (需安装 flash-attn)",
                          help_false="不使用 Flash Attention (默认)")
@@ -159,6 +167,19 @@ def args_to_config(args: argparse.Namespace) -> Dict[str, Any]:
     if prompt_cfg:
         config["prompt"] = prompt_cfg
 
+    predict_cfg = config_from_args(
+        args,
+        plain=("score_threshold", "nms_thresh", "new_det_thresh"),
+    )
+    if predict_cfg:
+        # CLI 参数名 → 配置键名映射
+        key_map = {
+            "score_threshold": "score_threshold_detection",
+            "nms_thresh": "det_nms_thresh",
+            "new_det_thresh": "new_det_thresh",
+        }
+        config["predict"] = {key_map[k]: v for k, v in predict_cfg.items()}
+
     return config
 
 
@@ -182,6 +203,20 @@ def predict(config: Dict) -> None:
     compile_model = get_nested_value(config, "model", "compile", default=DEFAULT_COMPILE)
     max_num_objects = get_nested_value(config, "model", "max_num_objects", default=DEFAULT_MAX_NUM_OBJECTS)
     multiplex_count = get_nested_value(config, "model", "multiplex_count", default=DEFAULT_MULTIPLEX_COUNT)
+
+    # ── 检测后处理阈值 (原后端硬编码, 现可调) ──
+    # sam3.1 默认 0.4/0.1/0.65, sam3 默认 0.5/0.1/0.7; 前端配置按版本给不同默认值
+    version_default_thresh = {
+        "sam3.1": (0.4, 0.1, 0.65),
+        "sam3":   (0.5, 0.1, 0.7),
+    }
+    d_score, d_nms, d_newdet = version_default_thresh.get(version, (0.4, 0.1, 0.65))
+    score_threshold_detection = get_nested_value(
+        config, "predict", "score_threshold_detection", default=d_score)
+    det_nms_thresh = get_nested_value(
+        config, "predict", "det_nms_thresh", default=d_nms)
+    new_det_thresh = get_nested_value(
+        config, "predict", "new_det_thresh", default=d_newdet)
 
     input_path = get_nested_value(config, "io", "input")
     output_path = get_nested_value(config, "io", "output", default=DEFAULT_PREDICT_OUTPUT)
@@ -242,6 +277,7 @@ def predict(config: Dict) -> None:
     else:
         print(f"推理分辨率: 1008 (sam3 原版固定)")
     print(f"Flash Attention 3: {use_fa3} | 实数 RoPE: {use_rope_real} | torch.compile: {compile_model}")
+    print(f"检测阈值: score={score_threshold_detection} nms_iou={det_nms_thresh} new_det={new_det_thresh}")
     print(f"类别: {classes} @ 帧 {frame_index}")
     print(f"输入单元: {len(units)} 个")
     for i, u in enumerate(units):
@@ -262,6 +298,9 @@ def predict(config: Dict) -> None:
         finetune_ckpt=finetune_ckpt,
         max_num_objects=max_num_objects,
         multiplex_count=multiplex_count,
+        score_threshold_detection=score_threshold_detection,
+        det_nms_thresh=det_nms_thresh,
+        new_det_thresh=new_det_thresh,
     )
     print(f"模型构建完成\n")
 
@@ -430,9 +469,10 @@ def process_unit(
             else:
                 cv2.imwrite(str(tree.masks / f"{fi:06d}.png"), mask_img)
 
-        # vis image (按类别着色, 只画分割结果)
+        # vis image (按类别着色, mask 半透明叠加 + 检测框 + 标签置信度)
         if save_vis:
-            vis = draw_mask_overlay(frame_rgb, masks, cls_names, class_colors)
+            vis = draw_mask_overlay(frame_rgb, masks, cls_names, class_colors,
+                                    boxes=boxes, probs=probs)
             if unit.kind == "video":
                 vis_frames.append(vis)
             else:

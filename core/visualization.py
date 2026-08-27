@@ -1,8 +1,8 @@
 """Visualization utilities for SAM 3 inference results.
 
-Draws segmentation mask overlays on video frames: per-class colors,
-semi-transparent fill + solid contour, with a corner legend
-(no bounding boxes — masks only).
+Draws segmentation mask overlays + bounding boxes on video frames:
+per-class colors, semi-transparent mask fill + solid contour, YOLO-style
+box edges with class+confidence labels, and a corner legend.
 """
 
 from __future__ import annotations
@@ -38,9 +38,13 @@ def draw_mask_overlay(
     class_names: list,
     class_colors: dict | None = None,
     alpha: float = 0.7,
+    boxes: list | None = None,
+    probs: list | None = None,
 ) -> np.ndarray:
-    """Draw segmentation overlays on a frame: 每类一个颜色, 半透明填充 +
-    实心轮廓线, 左上角绘制图例 (只列出当前帧实际出现的类别)。
+    """Draw segmentation overlays + bounding boxes on a frame.
+
+    每类一个颜色: mask 半透明填充 + 实心轮廓线; 有 box 时画 YOLO 风格色边框
+    + 标签底色块 (类名+置信度); 左上角图例只列当前帧实际出现的类别。
 
     Args:
         frame_rgb: Input frame in RGB format (H, W, 3).
@@ -49,6 +53,9 @@ def draw_mask_overlay(
         class_names: 与 masks 一一对应的类别名.
         class_colors: 类名→BGR 颜色映射; 不传则按 class_names 出现顺序现场分配.
         alpha: 掩码填充的不透明度 (0=不可见, 1=不透明).
+        boxes: 与 masks 一一对应的检测框, xywh 像素坐标 [x, y, w, h];
+            None 或缺省=不画框 (纯分割模式).
+        probs: 与 masks 一一对应的置信度; 有 box 时显示在标签里。
 
     Returns:
         Visualization frame in BGR format (ready for cv2.imwrite).
@@ -60,6 +67,7 @@ def draw_mask_overlay(
         class_colors = build_class_colors(list(dict.fromkeys(class_names)))
 
     kernel = np.ones((3, 3), np.uint8)
+    # 第一遍: mask 半透明填充 + 轮廓 (在画框之前, 避免框被半透明色冲淡)
     for m, cn in zip(masks, class_names):
         if m is None:
             continue
@@ -75,6 +83,24 @@ def draw_mask_overlay(
         # 实心轮廓线 (掩码边缘 = mask & ~erode(mask))
         edge = m & ~cv2.erode(m.astype(np.uint8), kernel).astype(bool)
         vis[edge] = color.astype(np.uint8)
+
+    # 第二遍: 检测框 + 标签 (有 box 时画, YOLO box_label 风格)
+    if boxes is not None:
+        for i, (m, cn) in enumerate(zip(masks, class_names)):
+            if i >= len(boxes) or boxes[i] is None:
+                continue
+            x, y, bw, bh = [float(v) for v in boxes[i]]
+            x1, y1, x2, y2 = int(x), int(y), int(x + bw), int(y + bh)
+            color = class_colors.get(cn, (200, 200, 200))
+            # 色边框
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+            # 标签底色块 + 白字 (类名 + 置信度)
+            prob_str = f" {probs[i]:.2f}" if probs is not None and i < len(probs) else ""
+            label = f"{cn}{prob_str}"
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(vis, (x1, y1 - th - 6), (x1 + tw + 4, y1), color, -1)
+            cv2.putText(vis, label, (x1 + 2, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
     _draw_legend(vis, class_names, class_colors)
     return vis

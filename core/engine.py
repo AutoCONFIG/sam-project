@@ -92,6 +92,11 @@ class Sam3VideoPredictor:
         finetune_ckpt: Optional[str] = None,
         max_num_objects: int = DEFAULT_MAX_NUM_OBJECTS,
         multiplex_count: int = DEFAULT_MULTIPLEX_COUNT,
+        # 检测后处理阈值 (透传给后端 builder; sam3.1 默认 0.4/0.1/0.65,
+        # sam3 默认 0.5/0.1/0.7, 前端配置按版本给不同默认值覆盖此处)
+        score_threshold_detection: float = 0.4,
+        det_nms_thresh: float = 0.1,
+        new_det_thresh: float = 0.65,
     ):
         from sam3.model_builder import build_sam3_predictor
 
@@ -102,6 +107,11 @@ class Sam3VideoPredictor:
             use_rope_real=use_rope_real,
             compile=compile,
             warm_up=compile,
+            # 检测后处理阈值 (两个版本都支持: sam3.1 经 build_sam3_multiplex_video_predictor
+            # 显式参数, sam3 经 **kwargs → Sam3VideoPredictor → build_sam3_video_model)
+            score_threshold_detection=score_threshold_detection,
+            det_nms_thresh=det_nms_thresh,
+            new_det_thresh=new_det_thresh,
         )
         if version == "sam3.1":
             # image_size/max_num_objects/multiplex_count 仅 sam3.1 (multiplex)
@@ -117,18 +127,18 @@ class Sam3VideoPredictor:
         _torch.cuda.empty_cache()
 
     def _load_finetune_ckpt(self, ckpt_path: str, version: str) -> None:
-        """把微调 checkpoint (image model 裸 state_dict) 加载进 multiplex detector。
+        """把微调 checkpoint (image model 裸 state_dict) 加载进 detector。
 
-        训练链 (build_sam3_image_model) 产出 Sam3Image 的 state_dict; multiplex
-        推理模型的 detector 是 Sam3MultiplexDetector(Sam3Image 子类), 后端自己在
-        Sam3MultiplexBase.__init__ 里也是直接把这种 ckpt 灌进 detector
-        (strict=False), 这里沿用同一约定, 不改动后端。
+        训练链 (build_sam3_image_model) 产出 Sam3Image 的 state_dict, 键为
+        backbone.*/transformer.*/segmentation_head.* 等 (无 detector. 前缀,
+        即 detector 子模块自身的相对键)。sam3 与 sam3.1 推理模型的 detector
+        子模块 (Sam3VideoInferenceWithInstanceInteractivity.detector /
+        Sam3MultiplexDetector, 均 Sam3Image 系列) 的 state_dict 键同构,
+        因此两个版本走同一路径: 对 model.detector 调 load_state_dict(
+        strict=False); 训练没有的键 (如交互式 neck sam2_convs /
+        interactive_convs) 保留预训练原值。后端 Sam3MultiplexBase.__init__
+        里也是同样约定直接灌 ckpt, 这里沿用, 不改动后端。
         """
-        if version != "sam3.1":
-            raise ValueError(
-                f"finetune_ckpt 仅支持 sam3.1 (multiplex) 推理; "
-                f"{version} 原版视频模型的键结构不同 (训练产出无 detector. 前缀)"
-            )
         import torch
 
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
@@ -141,7 +151,7 @@ class Sam3VideoPredictor:
 
         detector = self._predictor.model.detector
         missing, unexpected = detector.load_state_dict(ckpt, strict=False)
-        print(f"已加载微调权重: {ckpt_path} → detector "
+        print(f"已加载微调权重: {ckpt_path} → detector ({version}) "
               f"({len(ckpt)} 键, missing {len(missing)}, unexpected {len(unexpected)})")
         if unexpected:
             print(f"  警告: 有 {len(unexpected)} 个未匹配键 (前 5 个: {unexpected[:5]})")

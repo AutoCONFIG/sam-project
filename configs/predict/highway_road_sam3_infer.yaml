@@ -1,27 +1,36 @@
-# SAM 3.1 零样本对照实验 — 泛用类别 (car/road/sky)
-# =================================================
-# 目的: 与 highway_road_preview.yaml (8 类道路区域特殊类) 对照,
-# 判断"效果差"是代码问题还是预训练模型在特殊类上的零样本能力问题。
-# 输入单一场景 (长张高速K76, 24 帧, 画面中有明显小汽车/货车)。
-# prompt 选 COCO 常见类: car/truck 高速场景必有; road/sky 验证区域类。
+# SAM 3 推理配置 — highway_road 微调权重对新数据推理 (sam3 臂)
+# ================================================================
+# 用 highway_road_sam3_finetune.yaml 训练产出的微调权重, 对新数据
+# /data2/kaiyun/xinzhi/test/ 做推理。
 #
-# 字段与注释模板与 video_text.yaml 完全一致;
+# 对齐点 (finetune_ckpt 要求训练/推理一致):
+#   - version: sam3              ← 训练用 sam3 臂 (pretrain/sam3/sam3.pt)
+#   - image_size: 1008           ← sam3 原版后端固定 1008, 与训练 resolution 一致
+#   - prompt.text 3 类           ← 与数据集 categories[].name (即训练 prompt) 完全一致
+#   - finetune_ckpt              ← 训练产物 checkpoint_best.pt, 加载进 detector
+#                                  (checkpoint 仍提供 tracker 等基础权重)
+#
+# sam3 原版注意:
+#   - image_size 后端固定 1008, 不支持参数化 (需 ≥24GB 显存); 本配置勿改
+#   - max_num_objects / multiplex_count / compile 仅 sam3.1 支持, 本配置中无效
+#
+# 字段与注释模板与 video_text_sam3.yaml 一致;
 # 删掉/留空某字段 = 用代码默认值, 与写默认值等价。
 #
-# 用法: python sam.py configs/predict/generic_class_test.yaml
+# 用法: python sam.py configs/predict/highway_road_sam3_infer.yaml
 
 mode: predict
 
 model:
-  version: sam3.1                   # 模型版本: sam3.1 (multiplex, 推荐) / sam3 (原版)
-  checkpoint: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/sam-project/pretrain/sam3.1/sam3.1_multiplex.pt
-                                    # 权重路径 (sam3.1_multiplex.pt 或 sam3.pt), 必填
-  finetune_ckpt:                    # 微调权重 (训练链产出 runs/train/.../checkpoints/checkpoint.pt;
-                                    # 仅 sam3.1, 加载进 detector, checkpoint 仍提供 tracker 等基础权重;
-                                    # 注意训练 resolution 需与 image_size 一致), 空=纯预训练 (默认)
-  image_size: 672                   # 推理分辨率, 须为 336 的倍数; ≥24G 显存 1008, 16G 用 672
+  version: sam3                     # 模型版本: sam3.1 (multiplex, 推荐) / sam3 (原版)
+  checkpoint: pretrain/sam3/sam3.pt # 基础权重 (提供完整视频模型: detector + tracker), 必填
+  finetune_ckpt: runs/train/highway_road_sam3/202608261/checkpoints/checkpoint_best.pt
+                                    # 微调权重 (训练链产出; 加载进 detector, 覆盖 detector 部分;
+                                    # tracker 等仍由上面的 checkpoint 提供;
+                                    # 训练 resolution 需与 image_size 一致), 空=纯预训练
+  image_size: 1008                  # 推理分辨率, 须为 336 的倍数; ≥24G 显存 1008, 16G 用 672
                                     # (仅 sam3.1 支持; sam3 原版后端固定 1008)
-  max_num_objects: 32               # 单 session 最多同时跟踪对象数, 超出丢弃并告警
+  max_num_objects: 16               # 单 session 最多同时跟踪对象数, 超出丢弃并告警
                                     # (仅 sam3.1; 运行时上限, 多目标场景可自由调大, 显存随之涨)
   multiplex_count: 16               # 每个 multiplex 桶的对象容量 (仅 sam3.1)
                                     # ⚠ 结构参数: 已固化进 checkpoint 权重形状 (预训练=16),
@@ -32,9 +41,8 @@ model:
   frame_index: 0                    # 添加文本提示的帧索引
 
 io:
-  input: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/datasets/seg/highway_road_coco/train/湖南分割_1/长张高速K76
-                                    # 输入: 视频文件 / 图片目录 (递归扫描, 必填)
-  output: runs/predict/generic_class_test   # 输出根目录
+  input: /data2/kaiyun/xinzhi/test/ # 输入: 视频文件 / 图片目录 (递归扫描, 必填)
+  output: runs/predict/highway_road_sam3/202608261   # 输出根目录
   save_vis: true                    # 保存可视化 (视频→mp4, 图片→jpg; 按类别着色+图例, 无检测框)
   save_masks: true                  # 保存 mask (视频→mp4, 图片→png) + npz 原始数据
   save_video: false                 # 视频输入时合成 mp4 (图片输入忽略)
@@ -62,14 +70,8 @@ io:
 # 兼容: 字符串 (如 text: "person") 会被自动转单元素列表, 但推荐列表写法。
 # ─────────────────────────────────────────────────────────────────────
 
-# ── 检测后处理阈值 (原后端硬编码, 现可调; 不写 = 用版本默认值) ──
-predict:
-  score_threshold_detection: 0.4  # 检测置信度阈值 (sam3.1 默认 0.4, sam3 默认 0.5; 调低→更多检测, 调高→更精准)
-  det_nms_thresh: 0.1             # 检测 NMS IoU 阈值 (调高→保留更多重叠框, 调低→去重更激进)
-  new_det_thresh: 0.65            # 新对象确认阈值 (跟踪中新增对象需达此分数; 调低→更容易新增, 调高→更保守)
-
 prompt:
   text:                             # 文本提示类别列表, 必填; 多类别加列表项 (见上方注释)
-    - car
-    - road
-    - sky
+    - highway up direction          # 以下 3 类与训练数据集 categories[].name 完全一致
+    - highway down direction        # (configs/datasets/highway_road_merged.yaml)
+    - road isolation zone
