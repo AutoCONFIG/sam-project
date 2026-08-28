@@ -24,12 +24,13 @@ mode: predict
 model:
   version: sam3                     # 模型版本: sam3.1 (multiplex, 推荐) / sam3 (原版)
   checkpoint: pretrain/sam3/highway_road_sam3_finetune.pt
-                                    # 单 pt 完整推理权重 (含 detector+tracker, 由
-                                    # tools/merge_finetune_to_full_pt.py 合并预训练完整
-                                    # pt + 训练微调产物得出; 像 YOLO 那样单文件部署,
-                                    # 不再需要 finetune_ckpt), 必填
-  finetune_ckpt:                    # 留空: 已用合并单 pt; 若用预训练基础权重+微调覆盖
-                                    # 的双文件模式, 这里填训练产物 (core/engine.py 支持)
+                                    # 完整推理权重 (含 detector+tracker), 必填。
+                                    # 两种方式:
+                                    #   1) 合并单 pt: tools/merge_finetune_to_full_pt.py
+                                    #      合并预训练完整 pt + 训练微调产物, 只填本字段
+                                    #   2) 双文件: 本字段填预训练完整权重, finetune_ckpt
+                                    #      填训练产物, engine 会把微调权重覆盖进 detector
+  finetune_ckpt:                    # 留空=用合并单 pt; 填训练产物=双文件模式 (见上)
   image_size: 1008                  # 推理分辨率, 须为 336 的倍数; ≥24G 显存 1008, 16G 用 672
                                     # (仅 sam3.1 支持; sam3 原版后端固定 1008)
   max_num_objects: 16               # 单 session 最多同时跟踪对象数, 超出丢弃并告警
@@ -78,7 +79,7 @@ io:
 
 # ── 检测后处理阈值 (原后端硬编码, 现可调; 不写 = 用版本默认值) ──
 predict:
-  score_threshold_detection: 0.5  # 检测置信度阈值 (sam3.1 默认 0.4, sam3 默认 0.5; 调低→更多检测, 调高→更精准)
+  score_threshold_detection: 0.8  # 检测置信度阈值 (sam3.1 默认 0.4, sam3 默认 0.5; 调低→更多检测, 调高→更精准)
   det_nms_thresh: 0.1             # 检测 NMS IoU 阈值 (调高→保留更多重叠框, 调低→去重更激进)
   new_det_thresh: 0.7             # 新对象确认阈值 (跟踪中新增对象需达此分数; 调低→更容易新增, 调高→更保守)
 
