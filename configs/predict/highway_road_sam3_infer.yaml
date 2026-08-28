@@ -23,11 +23,13 @@ mode: predict
 
 model:
   version: sam3                     # 模型版本: sam3.1 (multiplex, 推荐) / sam3 (原版)
-  checkpoint: pretrain/sam3/sam3.pt # 基础权重 (提供完整视频模型: detector + tracker), 必填
-  finetune_ckpt: runs/train/highway_road_sam3/202608261/checkpoints/checkpoint_best.pt
-                                    # 微调权重 (训练链产出; 加载进 detector, 覆盖 detector 部分;
-                                    # tracker 等仍由上面的 checkpoint 提供;
-                                    # 训练 resolution 需与 image_size 一致), 空=纯预训练
+  checkpoint: pretrain/sam3/highway_road_sam3_finetune.pt
+                                    # 单 pt 完整推理权重 (含 detector+tracker, 由
+                                    # tools/merge_finetune_to_full_pt.py 合并预训练完整
+                                    # pt + 训练微调产物得出; 像 YOLO 那样单文件部署,
+                                    # 不再需要 finetune_ckpt), 必填
+  finetune_ckpt:                    # 留空: 已用合并单 pt; 若用预训练基础权重+微调覆盖
+                                    # 的双文件模式, 这里填训练产物 (core/engine.py 支持)
   image_size: 1008                  # 推理分辨率, 须为 336 的倍数; ≥24G 显存 1008, 16G 用 672
                                     # (仅 sam3.1 支持; sam3 原版后端固定 1008)
   max_num_objects: 16               # 单 session 最多同时跟踪对象数, 超出丢弃并告警
@@ -39,11 +41,15 @@ model:
   use_rope_real: true               # 实数 RoPE (避免 complex64 buffer)
   compile: false                    # torch.compile (首次编译慢, 之后推理约 2x; 仅 sam3.1)
   frame_index: 0                    # 添加文本提示的帧索引
+  device: '0'                       # GPU 选卡: '0' / '0,1' / '0,2,3' 等; 空/'auto'=继承
+                                    # CUDA_VISIBLE_DEVICES 或默认 GPU 0。多卡训练占满 0 号时
+                                    # 改成空闲卡号即可 (通过设 CUDA_VISIBLE_DEVICES 生效, 须在
+                                    # 模型构建前指定)。后端不支持 CPU 推理 (硬编码 cuda + NCCL)
 
 io:
   input: /data2/kaiyun/xinzhi/test/ # 输入: 视频文件 / 图片目录 (递归扫描, 必填)
   output: runs/predict/highway_road_sam3/202608261   # 输出根目录
-  save_vis: true                    # 保存可视化 (视频→mp4, 图片→jpg; 按类别着色+图例, 无检测框)
+  save_vis: true                    # 保存可视化 (视频→mp4, 图片→jpg; 按类别着色+检测框+图例+置信度)
   save_masks: true                  # 保存 mask (视频→mp4, 图片→png) + npz 原始数据
   save_video: false                 # 视频输入时合成 mp4 (图片输入忽略)
   save_labels: true                 # 导出标签
@@ -69,6 +75,12 @@ io:
 #
 # 兼容: 字符串 (如 text: "person") 会被自动转单元素列表, 但推荐列表写法。
 # ─────────────────────────────────────────────────────────────────────
+
+# ── 检测后处理阈值 (原后端硬编码, 现可调; 不写 = 用版本默认值) ──
+predict:
+  score_threshold_detection: 0.5  # 检测置信度阈值 (sam3.1 默认 0.4, sam3 默认 0.5; 调低→更多检测, 调高→更精准)
+  det_nms_thresh: 0.1             # 检测 NMS IoU 阈值 (调高→保留更多重叠框, 调低→去重更激进)
+  new_det_thresh: 0.7             # 新对象确认阈值 (跟踪中新增对象需达此分数; 调低→更容易新增, 调高→更保守)
 
 prompt:
   text:                             # 文本提示类别列表, 必填; 多类别加列表项 (见上方注释)

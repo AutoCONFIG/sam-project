@@ -34,7 +34,7 @@ io:
   input: /media/yun/706bc403-c76c-4fdd-8a3f-d954b6189048/datasets/seg/highway_road_coco/train/湖南分割_1/
                                     # 输入: 视频文件 / 图片目录 (递归扫描, 必填)
   output: runs/predict/highway_road_preview   # 输出根目录
-  save_vis: true                    # 保存可视化 (视频→mp4, 图片→jpg; 按类别着色+图例, 无检测框)
+  save_vis: true                    # 保存可视化 (视频→mp4, 图片→jpg; 按类别着色+检测框+图例+置信度)
   save_masks: true                  # 保存 mask (视频→mp4, 图片→png) + npz 原始数据
   save_video: false                 # 视频输入时合成 mp4 (图片输入忽略)
   save_labels: true                 # 导出标签
