@@ -85,6 +85,14 @@ predict:
   score_threshold_detection: 0.5  # 检测置信度阈值 (sam3.1 默认 0.4, sam3 默认 0.5; 调低→更多检测, 调高→更精准)
   det_nms_thresh: 0.1             # 检测 NMS IoU 阈值 (调高→保留更多重叠框, 调低→去重更激进)
   new_det_thresh: 0.7             # 新对象确认阈值 (跟踪中新增对象需达此分数; 调低→更容易新增, 调高→更保守)
+  # ── 跨类 mask NMS (前端后处理, 不改模型/训练) ──
+  # SAM3 逐类别独立推理后直接拼接, 跨类无竞争; 互斥区域任务 (如上下行) 同一
+  # 区域可能被多个类别高分命中。开启后对每帧全部检测做 class-agnostic
+  # mask-IoU NMS (算法同 YOLO-seg NMS, IoU 基准从 box 换成 mask, 适合大面积
+  # 相邻区域: box 必然重叠但 mask 可能只相邻)。不写死类别对, 全类两两竞争;
+  # 不需要互斥的任务关掉即可, 不影响后续迁移。
+  cross_class_nms: true           # 跨类 mask NMS 开关 (true/false)
+  cross_class_nms_iou: 0.5        # mask IoU 阈值 (>= 该值则抑制低分检测; 调高→保留更多, 调低→去重更激进)
 
 prompt:
   text:                             # 文本提示类别列表, 必填; 多类别加列表项 (见上方注释)

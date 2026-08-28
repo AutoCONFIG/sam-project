@@ -70,11 +70,11 @@ hydra:
             box_noise_std: 0.1
             box_noise_max: 20
           - _target_: sam3.train.transforms.segmentation.DecodeRle
-          # ── 几何/光度增强 (2026-08 新增, 官方配方原本没有) ──
-          # hflip: box/mask/semantic_target 同步翻转; 对本类数据集 (上行/下行/
-          # 隔离带) 左右镜像不改类别语义, 安全。其余任务若类别分左右, 请删掉此项
+          # hflip 会同步翻转 image/box/mask，但不会改变 query 的类别语义。
+          # 本任务的 up/down 依赖原始道路/摄像机空间关系，镜像后仍保持原类别
+          # 会制造方向先验噪声，因此关闭；类别左右任务也不应直接复用此增强。
           - _target_: sam3.train.transforms.basic_for_api.RandomHorizontalFlip
-            p: 0.5
+            p: 0.0
             consistent_transform: ${scratch.consistent_transform}
           # 颜色抖动: 以 p=0.5 概率施加 (RandomSelectAPI 二选一, 缺省另一侧=恒等);
           # 幅度温和, 适配多来源摄像头 (白天/夜晚/不同路段) 的光照差异

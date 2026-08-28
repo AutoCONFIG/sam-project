@@ -18,10 +18,13 @@
 #   数据: 17 个源子数据集经 tools/merge_highway_coco_dedup.py 合并为单数据集
 #   (id 全局唯一, 已按内容 md5 去重并剔除 train/valid 泄漏; 不用多数据集拼接
 #   是因为拼接后 image id 冲突 + 评测 GT 只覆盖首个子集, val mAP/早停不可信)。
-#   策略: 冻结 ViT 图像主干 + 文本编码器 (保住预训练通用检测能力, 防止微调后
-#   其他类别退化), 只训 transformer 主体 + 检测/分割头; 数据集带 mask 标注,
-#   用分割训练模板 (template_image_seg.yaml); 分辨率 1008 充分利用 24G 显存,
-#   且与 predict 的 image_size 一致 (finetune_ckpt 要求训练/推理分辨率一致)
+#   策略: 冻结 ViT 低层与文本编码器, 开放视觉 neck + ViT 顶部 8 层, 训练 transformer 主体
+#   + 检测/分割头; 让视觉高层适配道路透视、隔离带相对位置和上下行全局上下文,
+#   同时保留预训练底层特征和开放词汇能力。数据集带 mask 标注, 用分割训练模板
+#   (template_image_seg.yaml); 分辨率 1008 充分利用 24G 显存, 且与 predict 的 image_size
+#   一致 (finetune_ckpt 要求训练/推理分辨率一致)。SAM3 当前按每个文本类别独立的
+#   binary query (BCE/sigmoid) 训练, 不是三类 softmax; up/down 互斥语义不由模型结构保证,
+#   本配置先通过更充分的视觉微调改善判别, 不改预训练兼容的模型结构。
 #   A/B 对照: 本配置为 sam3 臂 (GPU 0-3), sam3.1 臂见
 #   highway_road_sam31_finetune.yaml (GPU 4-7), 输出目录独立, 可同时训练
 # ─────────────────────────────────────────────────────────────────────────────
@@ -105,8 +108,17 @@ train:
   # 验证: 训练启动日志会打印 "Freezing N params (patterns: ...), M params remain
   # trainable" 及前 10 个被冻参数名 —— 改完 pattern 先看这行确认生效;
   # pattern 命中全部参数会直接报错 (至少保留 1 个可训参数)
+  # 当前策略: 保留低层通用视觉特征, 开放 neck 和 ViT 顶部 8 层适配本域几何。
+  # blocks 0-23 冻结, blocks 24-31 训练; 文本编码器全部冻结。
+  # SAM3 每个类别使用独立 binary query, 不是共享三类 softmax, 因此这里只调整
+  # 特征适配能力, 不把高分当作三类互斥概率。
   freeze:
-    - backbone.vision_backbone.*
+    - backbone.vision_backbone.trunk.patch_embed.*
+    - backbone.vision_backbone.trunk.pos_embed
+    - backbone.vision_backbone.trunk.ln_pre.*
+    - backbone.vision_backbone.trunk.blocks.[0-9].*
+    - backbone.vision_backbone.trunk.blocks.1[0-9].*
+    - backbone.vision_backbone.trunk.blocks.2[0-3].*
     - backbone.language_backbone.*
 
   # ── 优化器 / 学习率 ──
@@ -121,9 +133,9 @@ train:
   amp_dtype: bfloat16        # 混合精度 dtype → trainer.optim.amp.amp_dtype
 
   # ── 训练循环 ──
-  batch: 7              # 每卡 batch → scratch.train_batch_size (按显存调; 全新训练显存约为冻结主干微调的 2~3 倍)
+  batch: 3              # 每卡 batch; 开放 ViT 顶层后按 24G 显存保守起步
   epochs: 150            # 训练轮数 → trainer.max_epochs
-  grad_accum: 1         # 梯度累积步数 → scratch.gradient_accumulation_steps
+  grad_accum: 2         # 梯度累积; 8 卡下有效 batch = 3×8×2=48
   seed: 123             # 随机种子 → trainer.seed_value
   val_freq: 1           # 每隔几轮验证 (>=1; 0 会让后端除零崩溃) → trainer.val_epoch_freq
   skip_first_val: false # 跳过首轮 (epoch 0) 结束时的验证 → trainer.skip_first_val
@@ -168,4 +180,4 @@ train:
   skip_saving_ckpts: false  # 是否不存 checkpoint → trainer.skip_saving_ckpts (微调必须 false)
 
 output:
-  path: runs/train/highway_road_sam3/202608261    # 实验输出目录 (checkpoints/tensorboard/logs) → paths.experiment_log_dir
+  path: runs/train/highway_road_sam3/20260828_top8    # 实验输出目录 (checkpoints/tensorboard/logs) → paths.experiment_log_dir

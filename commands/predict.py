@@ -35,6 +35,7 @@ from core.io_dispatch import (
     resolve_output_tree,
 )
 from core.labels import LabelExporter
+from core.postprocess import cross_class_mask_nms
 from core.visualization import build_class_colors, draw_mask_overlay
 from utils.config import (
     config_from_args,
@@ -256,6 +257,17 @@ def predict(config: Dict) -> None:
         config, "io", "label_format", default=list(DEFAULT_LABEL_FORMATS),
     )
     image_mode = get_nested_value(config, "io", "image_mode", default="independent")
+
+    # ── 跨类 mask NMS 后处理 ──
+    # SAM3 逐类别独立推理后直接拼接, 跨类无竞争; 互斥区域任务 (如上下行)
+    # 同一区域可能被多个类别高分命中。开启后对每帧全部检测做 class-agnostic
+    # mask-IoU NMS (算法同 YOLO-seg, IoU 基准从 box 换成 mask, 适合大面积相邻区域)。
+    cross_class_nms = get_nested_value(
+        config, "predict", "cross_class_nms", default=False)
+    cross_class_nms_iou = get_nested_value(
+        config, "predict", "cross_class_nms_iou", default=0.5)
+    if cross_class_nms:
+        print(f"跨类 mask NMS: 开启 (IoU 阈值={cross_class_nms_iou})")
 
     text = get_nested_value(config, "prompt", "text")
     frame_index = get_nested_value(
@@ -484,9 +496,17 @@ def process_unit(
             out_stem = unit.frames[fi].stem
         else:
             out_stem = f"{fi:06d}"
+        # 跨类 mask NMS: 在拆分成并行列表之前对整帧检测做抑制,
+        # 这样 labels/vis/npz 都看到过滤后的结果 (默认关闭, 需配置开启)
+        frame_dets = frame_results[fi]
+        if cross_class_nms and len(frame_dets) > 1:
+            frame_dets = cross_class_mask_nms(
+                frame_dets, h, w,
+                iou_threshold=cross_class_nms_iou,
+            )
         # split per-class results for this frame into parallel lists
         cls_names, obj_ids, masks, boxes, probs = [], [], [], [], []
-        for cn, oid, m, bx, pr in frame_results[fi]:
+        for cn, oid, m, bx, pr in frame_dets:
             cls_names.append(cn)
             obj_ids.append(oid)
             masks.append(m)
