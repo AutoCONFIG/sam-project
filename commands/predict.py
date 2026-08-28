@@ -478,6 +478,12 @@ def process_unit(
         if fi >= n or not frame_results[fi]:
             continue
         frame_rgb = frames[fi]
+        # 输出文件名: image_seq 保留原文件名 stem (去扩展名), video 用序号
+        # (视频帧本身无独立文件名, 仍用 6 位序号)
+        if unit.kind == "image_seq" and fi < len(unit.frames):
+            out_stem = unit.frames[fi].stem
+        else:
+            out_stem = f"{fi:06d}"
         # split per-class results for this frame into parallel lists
         cls_names, obj_ids, masks, boxes, probs = [], [], [], [], []
         for cn, oid, m, bx, pr in frame_results[fi]:
@@ -490,7 +496,7 @@ def process_unit(
 
         # labels — register objects grouped by class name
         if exporter is not None:
-            name = f"{fi:06d}.jpg"
+            name = f"{out_stem}.jpg"
             for cn in dict.fromkeys(cls_names):  # unique, order-preserving
                 idxs = [i for i, c in enumerate(cls_names) if c == cn]
                 exporter.add_frame(
@@ -506,7 +512,7 @@ def process_unit(
         if save_masks:
             mask_img = _render_label_map(obj_ids, masks, h, w)
             np.savez_compressed(
-                tree.npz / f"{fi:06d}.npz",
+                tree.npz / f"{out_stem}.npz",
                 label_map=mask_img,
                 meta=np.array([
                     {"obj_id": obj_ids[i],
@@ -519,7 +525,7 @@ def process_unit(
             if unit.kind == "video":
                 mask_frames.append(mask_img)
             else:
-                cv2.imwrite(str(tree.masks / f"{fi:06d}.png"), mask_img)
+                cv2.imwrite(str(tree.masks / f"{out_stem}.png"), mask_img)
 
         # vis image (按类别着色, mask 半透明叠加 + 检测框 + 标签置信度)
         if save_vis:
@@ -528,7 +534,7 @@ def process_unit(
             if unit.kind == "video":
                 vis_frames.append(vis)
             else:
-                cv2.imwrite(str(tree.vis / f"{fi:06d}.jpg"), vis)
+                cv2.imwrite(str(tree.vis / f"{out_stem}.jpg"), vis)
 
         if fi % 20 == 0 or fi == n - 1:
             print(f"  帧 {fi}/{n-1}: {len(obj_ids)} 对象")
