@@ -40,6 +40,9 @@ io:
   save_video: true                  # 视频输入时合成 mp4 (图片输入忽略)
   save_labels: true                 # 导出标签
   label_format: [coco, yolo]        # 标签格式: coco / yolo, 可多选
+  image_mode: sequence              # 图片目录处理: independent=每张独立检测 (默认, 适合各自
+                                    # 不同场景的图片集); sequence=第 0 帧检测后跨帧传播跟踪
+                                    # (适合视频抽帧序列); 视频文件输入忽略此字段
 
 # ─────────────────────────────────────────────────────────────────────
 # prompt.text 类别写法 (始终用列表):

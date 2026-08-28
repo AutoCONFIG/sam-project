@@ -55,6 +55,9 @@ io:
   save_video: false                 # 视频输入时合成 mp4 (图片输入忽略)
   save_labels: true                 # 导出标签
   label_format: [coco, yolo]        # 标签格式: coco / yolo, 可多选
+  image_mode: independent           # 图片目录处理: independent=每张独立检测 (默认, 适合各自
+                                    # 不同场景的图片集); sequence=第 0 帧检测后跨帧传播跟踪
+                                    # (适合视频抽帧序列); 视频文件输入忽略此字段
 
 # ─────────────────────────────────────────────────────────────────────
 # prompt.text 类别写法 (始终用列表):
@@ -79,7 +82,7 @@ io:
 
 # ── 检测后处理阈值 (原后端硬编码, 现可调; 不写 = 用版本默认值) ──
 predict:
-  score_threshold_detection: 0.8  # 检测置信度阈值 (sam3.1 默认 0.4, sam3 默认 0.5; 调低→更多检测, 调高→更精准)
+  score_threshold_detection: 0.5  # 检测置信度阈值 (sam3.1 默认 0.4, sam3 默认 0.5; 调低→更多检测, 调高→更精准)
   det_nms_thresh: 0.1             # 检测 NMS IoU 阈值 (调高→保留更多重叠框, 调低→去重更激进)
   new_det_thresh: 0.7             # 新对象确认阈值 (跟踪中新增对象需达此分数; 调低→更容易新增, 调高→更保守)
 

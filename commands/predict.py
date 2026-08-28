@@ -138,6 +138,13 @@ Examples:
     parser.add_argument("--label-format", type=str, default=None, nargs="+",
                         choices=["coco", "yolo"],
                         help=f"标签格式, 可多选 (默认 {'/'.join(DEFAULT_LABEL_FORMATS)})")
+    parser.add_argument("--device", type=str, default=None,
+                        help="GPU 选卡, 如 '0' / '0,1' / '0,2,3'; 空或 'auto'=用 CUDA_VISIBLE_DEVICES/默认 GPU 0。"
+                             "通过设置 CUDA_VISIBLE_DEVICES 生效, 须在模型构建前指定")
+    parser.add_argument("--image-mode", type=str, default=None,
+                        choices=["independent", "sequence"],
+                        help="图片目录处理方式: independent=每张独立检测 (默认, 适合各自不同场景的图片集); "
+                             "sequence=第 0 帧检测后跨帧传播跟踪 (适合视频抽帧序列); 视频文件输入忽略此字段")
 
     return parser.parse_args()
 
@@ -149,7 +156,7 @@ def args_to_config(args: argparse.Namespace) -> Dict[str, Any]:
     model_cfg = config_from_args(
         args,
         plain=("version", "checkpoint", "image_size", "frame_index", "finetune_ckpt",
-               "max_num_objects", "multiplex_count"),
+               "max_num_objects", "multiplex_count", "device"),
         boolean=("use_fa3", "use_rope_real", "compile"),
     )
     if model_cfg:
@@ -157,7 +164,7 @@ def args_to_config(args: argparse.Namespace) -> Dict[str, Any]:
 
     io_cfg = config_from_args(
         args,
-        plain=("input", "output", "label_format"),
+        plain=("input", "output", "label_format", "image_mode"),
         boolean=("save_vis", "save_masks", "save_video", "save_labels"),
     )
     if io_cfg:
@@ -203,6 +210,20 @@ def predict(config: Dict) -> None:
     compile_model = get_nested_value(config, "model", "compile", default=DEFAULT_COMPILE)
     max_num_objects = get_nested_value(config, "model", "max_num_objects", default=DEFAULT_MAX_NUM_OBJECTS)
     multiplex_count = get_nested_value(config, "model", "multiplex_count", default=DEFAULT_MULTIPLEX_COUNT)
+    device = get_nested_value(config, "model", "device")
+
+    # ── GPU 选卡 (在模型构建 / CUDA 初始化前设 CUDA_VISIBLE_DEVICES) ──
+    # 后端 Sam3VideoPredictorMultiGPU 通过 torch.cuda.current_device() 选卡,
+    # 受 CUDA_VISIBLE_DEVICES 控制。默认走 GPU 0; 多卡训练占满 0 号时, 用此
+    # 字段指定空闲卡 (如 "3" / "0,1")。须在任何 CUDA 操作前设置才生效。
+    import os as _os
+    if device and str(device).strip().lower() not in ("", "auto", "cpu"):
+        gpus = ",".join(g.strip() for g in str(device).split(",") if g.strip())
+        _os.environ["CUDA_VISIBLE_DEVICES"] = gpus
+        print(f"GPU 选卡: CUDA_VISIBLE_DEVICES={gpus}")
+    elif _os.environ.get("CUDA_VISIBLE_DEVICES"):
+        print(f"GPU 选卡 (继承环境): CUDA_VISIBLE_DEVICES={_os.environ['CUDA_VISIBLE_DEVICES']}")
+
 
     # ── 检测后处理阈值 (原后端硬编码, 现可调) ──
     # sam3.1 默认 0.4/0.1/0.65, sam3 默认 0.5/0.1/0.7; 前端配置按版本给不同默认值
@@ -227,6 +248,7 @@ def predict(config: Dict) -> None:
     label_formats = get_nested_value(
         config, "io", "label_format", default=list(DEFAULT_LABEL_FORMATS),
     )
+    image_mode = get_nested_value(config, "io", "image_mode", default="independent")
 
     text = get_nested_value(config, "prompt", "text")
     frame_index = get_nested_value(
@@ -314,6 +336,7 @@ def predict(config: Dict) -> None:
             tree=tree,
             classes=classes,
             frame_index=frame_index,
+            image_mode=image_mode,
             save_vis=save_vis,
             save_masks=save_masks,
             save_video=save_video,
@@ -329,17 +352,23 @@ def process_unit(
     tree: OutputTree,
     classes: List[str],
     frame_index: int,
-    save_vis: bool,
-    save_masks: bool,
-    save_video: bool,
-    save_labels: bool,
-    label_formats: List[str],
+    image_mode: str = "independent",
+    save_vis: bool = False,
+    save_masks: bool = False,
+    save_video: bool = False,
+    save_labels: bool = False,
+    label_formats: List[str] = None,
 ) -> None:
     """Process a single input unit: load frames → session → per-class inference.
 
     Output mirrors the input kind:
       - video  → vis/<stem>.mp4, masks/<stem>.mp4, masks_npz/*.npz, labels/
       - image_seq → vis/*.jpg, masks/*.png, masks_npz/*.npz, labels/
+
+    image_mode (仅 image_seq, 视频文件忽略):
+      - independent: 每张图独立检测 (add_text_prompt 逐帧调用), 不做跨帧传播。
+        适合各自不同场景的图片集 (如高速公路截图)。
+      - sequence: 第 0 帧检测后 propagate 跨帧传播跟踪, 适合视频抽帧序列。
 
     Multi-class: SAM3 cannot detect multiple distinct classes in one session
     (each text prompt resets the session). So each class runs its own
@@ -378,21 +407,36 @@ def process_unit(
     tmp_dir = write_frames_to_temp_dir(frames)
     try:
         session_id = engine.start_session(resource_path=tmp_dir, offload_video_to_cpu=True)
+
+        # 是否跨帧传播: 视频文件始终传播; 图片序列看 image_mode
+        do_propagate = (unit.kind == "video") or (image_mode == "sequence")
+
         for ci, cls in enumerate(classes):
             if ci > 0:
                 # reset before switching to a new text class (SAM3 requires
                 # reset_state between text prompts, else results are wrong)
                 engine.reset_session(session_id)
-            outputs = engine.add_text_prompt(session_id, frame_index, cls)
-            n_obj = len(outputs.get("out_obj_ids", []))
-            print(f"  [{ci+1}/{len(classes)}] '{cls}': 帧 {frame_index} 检测到 {n_obj} 个对象")
 
-            # Collect this class's per-frame results
-            cls_outputs: Dict[int, dict] = {frame_index: outputs}
-            for fi, out in engine.propagate(session_id):
-                if fi == frame_index:
-                    continue
-                cls_outputs[fi] = out
+            if do_propagate:
+                # 传播模式: 第 0 帧 (frame_index) 检测 + propagate 跨帧跟踪
+                outputs = engine.add_text_prompt(session_id, frame_index, cls)
+                n_obj = len(outputs.get("out_obj_ids", []))
+                print(f"  [{ci+1}/{len(classes)}] '{cls}': 帧 {frame_index} 检测到 {n_obj} 个对象")
+                cls_outputs: Dict[int, dict] = {frame_index: outputs}
+                for fi, out in engine.propagate(session_id):
+                    if fi == frame_index:
+                        continue
+                    cls_outputs[fi] = out
+            else:
+                # 独立模式: 每帧各自 add_text_prompt 检测, 不跨帧传播
+                # (图片之间无时序关系, 传播会把第 0 帧对象强行跟踪到不相关帧)
+                cls_outputs = {}
+                for fi in range(n):
+                    outputs = engine.add_text_prompt(session_id, fi, cls)
+                    cls_outputs[fi] = outputs
+                    if fi % 20 == 0 or fi == n - 1:
+                        n_obj = len(outputs.get("out_obj_ids", []))
+                        print(f"  [{ci+1}/{len(classes)}] '{cls}': 帧 {fi}/{n-1} 检测到 {n_obj} 个对象")
 
             for fi, out in cls_outputs.items():
                 if fi >= n:
