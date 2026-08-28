@@ -139,8 +139,8 @@ Examples:
                         choices=["coco", "yolo"],
                         help=f"标签格式, 可多选 (默认 {'/'.join(DEFAULT_LABEL_FORMATS)})")
     parser.add_argument("--device", type=str, default=None,
-                        help="GPU 选卡, 如 '0' / '0,1' / '0,2,3'; 空或 'auto'=用 CUDA_VISIBLE_DEVICES/默认 GPU 0。"
-                             "通过设置 CUDA_VISIBLE_DEVICES 生效, 须在模型构建前指定")
+                        help="推理设备/选卡: 'cpu'=纯 CPU 推理; '0'/'0,1'/'0,2,3'=GPU 选卡 (设 CUDA_VISIBLE_DEVICES); "
+                             "空或 'auto'=用 CUDA_VISIBLE_DEVICES 或默认 GPU 0。须在模型构建前指定")
     parser.add_argument("--image-mode", type=str, default=None,
                         choices=["independent", "sequence"],
                         help="图片目录处理方式: independent=每张独立检测 (默认, 适合各自不同场景的图片集); "
@@ -212,17 +212,24 @@ def predict(config: Dict) -> None:
     multiplex_count = get_nested_value(config, "model", "multiplex_count", default=DEFAULT_MULTIPLEX_COUNT)
     device = get_nested_value(config, "model", "device")
 
-    # ── GPU 选卡 (在模型构建 / CUDA 初始化前设 CUDA_VISIBLE_DEVICES) ──
+    # ── 推理设备解析 ──
+    # device 字段三义: "cpu" → 纯 CPU 推理 (透传给 engine 走 CPU 退化路径);
+    #   "" / "auto" / None → 自动 (有 GPU 用 cuda, 否则 cpu);
+    #   "3" / "0,1" → GPU 选卡 (走 cuda, 设 CUDA_VISIBLE_DEVICES)。
     # 后端 Sam3VideoPredictorMultiGPU 通过 torch.cuda.current_device() 选卡,
-    # 受 CUDA_VISIBLE_DEVICES 控制。默认走 GPU 0; 多卡训练占满 0 号时, 用此
-    # 字段指定空闲卡 (如 "3" / "0,1")。须在任何 CUDA 操作前设置才生效。
+    # 受 CUDA_VISIBLE_DEVICES 控制。须在任何 CUDA 操作前设置才生效。
     import os as _os
-    if device and str(device).strip().lower() not in ("", "auto", "cpu"):
+    dev_raw = str(device).strip().lower() if device else ""
+    force_cpu = dev_raw == "cpu"
+    effective_device = "cpu" if force_cpu else "cuda"
+    if not force_cpu and dev_raw not in ("", "auto"):
         gpus = ",".join(g.strip() for g in str(device).split(",") if g.strip())
         _os.environ["CUDA_VISIBLE_DEVICES"] = gpus
         print(f"GPU 选卡: CUDA_VISIBLE_DEVICES={gpus}")
-    elif _os.environ.get("CUDA_VISIBLE_DEVICES"):
+    elif not force_cpu and _os.environ.get("CUDA_VISIBLE_DEVICES"):
         print(f"GPU 选卡 (继承环境): CUDA_VISIBLE_DEVICES={_os.environ['CUDA_VISIBLE_DEVICES']}")
+    if force_cpu:
+        print("推理设备: CPU (model.device=cpu)")
 
 
     # ── 检测后处理阈值 (原后端硬编码, 现可调) ──
@@ -323,6 +330,7 @@ def predict(config: Dict) -> None:
         score_threshold_detection=score_threshold_detection,
         det_nms_thresh=det_nms_thresh,
         new_det_thresh=new_det_thresh,
+        device=effective_device,
     )
     print(f"模型构建完成\n")
 

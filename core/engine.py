@@ -97,7 +97,14 @@ class Sam3VideoPredictor:
         score_threshold_detection: float = 0.4,
         det_nms_thresh: float = 0.1,
         new_det_thresh: float = 0.65,
+        # 推理设备: None/"cuda" (默认, 无 CUDA 时自动落 cpu) 或 "cpu"。
+        # 前端 predict 配置 model.device=cpu 时透传到此, 走纯 CPU 推理。
+        device: Optional[str] = None,
     ):
+        import torch as _torch
+        if device is None:
+            device = "cuda" if _torch.cuda.is_available() else "cpu"
+
         from sam3.model_builder import build_sam3_predictor
 
         build_kwargs = dict(
@@ -112,6 +119,8 @@ class Sam3VideoPredictor:
             score_threshold_detection=score_threshold_detection,
             det_nms_thresh=det_nms_thresh,
             new_det_thresh=new_det_thresh,
+            # 设备透传: sam3.1 经显式参数, sam3 经 **kwargs → Sam3VideoPredictor
+            device=device,
         )
         if version == "sam3.1":
             # image_size/max_num_objects/multiplex_count 仅 sam3.1 (multiplex)
@@ -123,8 +132,8 @@ class Sam3VideoPredictor:
         if finetune_ckpt:
             self._load_finetune_ckpt(finetune_ckpt, version)
 
-        import torch as _torch
-        _torch.cuda.empty_cache()
+        if _torch.cuda.is_available():
+            _torch.cuda.empty_cache()
 
     def _load_finetune_ckpt(self, ckpt_path: str, version: str) -> None:
         """把微调 checkpoint (image model 裸 state_dict) 加载进 detector。
