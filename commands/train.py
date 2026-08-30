@@ -762,6 +762,11 @@ def train(config: Dict) -> None:
     env["PYTHONPATH"] = str(SAM3_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     if gpu_ids:
         env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in gpu_ids)
+    # 显存碎片防护: 高占用长训练下缓存分配器的预留块会碎裂, 空闲总量够但找不到
+    # 连续大块而 OOM (实测 batch6/1008 稳态 22G/24G 跑 11 epoch 后 backward
+    # 申请 1.42G 连续块失败); expandable_segments 使预留段可伸缩。
+    # setdefault: 外部已导出 PYTORCH_CUDA_ALLOC_CONF 时尊重外部值
+    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     subprocess.run(cmd, check=True, env=env)
 
 

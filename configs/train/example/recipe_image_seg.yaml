@@ -436,14 +436,12 @@ hydra:
               cooldown_steps: ${scratch.scheduler_cooldown}
             param_names:
               - 'backbone.vision_backbone.*'
-          - scheduler:
-              _target_: sam3.train.optim.schedulers.InverseSquareRootParamScheduler
-              base_lr: ${scratch.lr_language_backbone}
-              timescale: ${scratch.scheduler_timescale}
-              warmup_steps: ${scratch.scheduler_warmup}
-              cooldown_steps: ${scratch.scheduler_cooldown}
-            param_names:
-              - 'backbone.language_backbone.*'
+          # language_backbone 参数组已删: 本配方仅被 highway_road sam3/sam3.1 两个微调臂
+          # 使用, 二者都在 trainer.freeze 冻结了 backbone.language_backbone.* (文本编码器),
+          # 保留该组只会每次启动打 "整组无匹配参数, 跳过该组" 的 WARNING。
+          # 如后续配置要放开文本编码器 (freeze 里删掉 backbone.language_backbone.*),
+          # 恢复此组: 参照上方 vision_backbone 组, base_lr 用 ${scratch.lr_language_backbone},
+          # param_names 用 'backbone.language_backbone.*'
         weight_decay:
           - scheduler:
               _target_: fvcore.common.param_scheduler.ConstantParamScheduler
