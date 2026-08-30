@@ -133,13 +133,13 @@ train:
   amp_dtype: bfloat16        # 混合精度 dtype → trainer.optim.amp.amp_dtype
 
   # ── 训练循环 ──
-  batch: 3              # 每卡 batch; 开放 ViT 顶层后按 24G 显存保守起步
+  batch: 6              # 每卡 batch (有效 batch=6×8=48; 实测显存峰值 22G/24G, 训练稳态安全)
   epochs: 150            # 训练轮数 → trainer.max_epochs
-  grad_accum: 2         # 梯度累积; 8 卡下有效 batch = 3×8×2=48
+  grad_accum: 1         # 梯度累积步数 (trainer 的 grad_accum>1 需特殊 collator 返回 list, 当前不支持)
   seed: 123             # 随机种子 → trainer.seed_value
   val_freq: 1           # 每隔几轮验证 (>=1; 0 会让后端除零崩溃) → trainer.val_epoch_freq
   skip_first_val: false # 跳过首轮 (epoch 0) 结束时的验证 → trainer.skip_first_val
-  val_batch: 11          # 验证 batch → scratch.val_batch_size
+  val_batch: 5          # 验证 batch (训练稳态已占 22G, 验证还有 viz mask 插值开销, 调小防验证期 OOM)
   early_stop: true      # 早停开关 → trainer.early_stop.enabled (按验证次数计)
   early_stop_patience: 20  # 连续 N 次验证无改进即停 → trainer.early_stop.patience
 
